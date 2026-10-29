@@ -66,6 +66,32 @@ def dumps(obj, **kw):
     return str(text)
 
 
+_FOLD = {u"ð": u"d", u"þ": u"th", u"æ": u"ae", u"ø": u"o", u"ß": u"ss", u"œ": u"oe"}
+
+
+def fold(name):
+    """Name without case, accents or special letters: 'Ál Stál' -> 'al stal'."""
+    s = _text(name or u"").strip().lower()
+    s = u"".join(_FOLD.get(c, c) for c in s)
+    try:
+        import unicodedata
+        s = u"".join(c for c in unicodedata.normalize("NFKD", s)
+                     if not unicodedata.combining(c))
+    except Exception:
+        pass
+    return u" ".join(s.split())
+
+
+def match_name(wanted, names):
+    """Exact name first, then case/accent-insensitive. None when no match."""
+    names = list(names)
+    if wanted in names:
+        return wanted
+    key = fold(wanted)
+    hits = [n for n in names if fold(n) == key]
+    return hits[0] if len(hits) == 1 else None
+
+
 def loads(text):
     return json.loads(text)
 

@@ -171,3 +171,5 @@ if win.result:
     out.print_md("- {} panels, {} skipped (openings or failed geometry)".format(made, skipped))
     out.print_md("- Cover area {:.1f} m², sheet area {:.1f} m², weight {:.0f} kg".format(
         totals["cover_area_m2"], totals["developed_area_m2"], totals["weight_kg"]))
+    out.print_md("- To change it: edit the **CT_** parameters on any panel in Properties, "
+                 "then click **Regenerate**.")

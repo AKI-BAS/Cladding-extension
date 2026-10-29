@@ -19,25 +19,13 @@ from Autodesk.Revit.DB.ExtensibleStorage import (
     Schema, SchemaBuilder, Entity, AccessLevel,
 )
 
-from cladding import profiles, layout
+from cladding import profiles, layout, inputs, revit_params
 
 MM = 1.0 / 304.8
 MIN_MODEL_T = 1.5   # mm, thinnest sheet Revit can model reliably
 MIN_EDGE = 1.2      # mm, Revit's short-curve tolerance is ~0.8 mm
 APP_ID = "CladdingTools"
 SCHEMA_GUID = Guid("6b0f3c1e-8a52-4d6f-9c1b-2e7a5d4f9a31")
-
-# Shared parameters filled in when they exist on Generic Models.
-# Add them once with Manage > Shared Parameters to get them in schedules.
-PARAMS = {
-    "CT_Profile": "profile",
-    "CT_PanelLength": "length_mm",
-    "CT_PanelWidth": "width_mm",
-    "CT_CoverArea": "cover_area_m2",
-    "CT_DevelopedArea": "developed_area_m2",
-    "CT_Weight": "weight_kg",
-}
-
 
 # --------------------------------------------------------------------------
 # Face frame
@@ -136,12 +124,12 @@ def _drop_short(pts, min_len, closed=False):
 # Build / delete
 # --------------------------------------------------------------------------
 def find_material(doc, name):
+    """Exact name, else ignoring case and accents ('al' finds 'Ál')."""
     if not name:
         return ElementId.InvalidElementId
-    for m in FilteredElementCollector(doc).OfClass(Material):
-        if m.Name == name:
-            return m.Id
-    return ElementId.InvalidElementId
+    mats = dict((m.Name, m.Id) for m in FilteredElementCollector(doc).OfClass(Material))
+    hit = profiles.match_name(name, mats.keys())
+    return mats[hit] if hit is not None else ElementId.InvalidElementId
 
 
 def build(doc, faces, recipe, group_id=None):
@@ -151,7 +139,9 @@ def build(doc, faces, recipe, group_id=None):
     """
     r = layout.merged(recipe)
     group_id = group_id or uuid.uuid4().hex[:12]
+    revit_params.ensure_parameters(doc)
     mat = find_material(doc, r["material"])
+    recipe_values = inputs.recipe_inputs(r)
     created, skipped, all_panels = 0, 0, []
     refs = [ref.ConvertToStableRepresentation(doc) for ref, _ in faces]
     payload = profiles.dumps({"group": group_id, "faces": refs, "recipe": r})
@@ -176,10 +166,10 @@ def build(doc, faces, recipe, group_id=None):
             shapes.Add(solid)
             ds.SetShape(shapes)
             q = profiles.panel_quantities(r["profile"], panel["width"], panel["length"])
-            q.update({"profile": r["profile"].get("name", "Custom"),
-                      "length_mm": round(panel["length"]),
-                      "width_mm": round(panel["width"])})
-            _write_params(ds, q, group_id)
+            values = dict(recipe_values)
+            values.update(inputs.panel_outputs(group_id, panel, q))
+            revit_params.set_values(ds, values)
+            _write_comment(ds, group_id, recipe_values["CT_Profile"], panel)
             _store(ds, payload)
             all_panels.append(panel)
             created += 1
@@ -188,9 +178,8 @@ def build(doc, faces, recipe, group_id=None):
 
 def delete_group(doc, group_id):
     ids = List[ElementId]()
-    for ds in FilteredElementCollector(doc).OfClass(DirectShape):
-        if ds.ApplicationId == APP_ID and ds.ApplicationDataId == group_id:
-            ids.Add(ds.Id)
+    for ds in group_panels(doc, group_id):
+        ids.Add(ds.Id)
     if ids.Count:
         doc.Delete(ids)
     return ids.Count
@@ -211,27 +200,16 @@ def resolve_faces(doc, stable_refs):
 # --------------------------------------------------------------------------
 # Parameters and stored recipe
 # --------------------------------------------------------------------------
-def _write_params(el, values, group_id):
-    for pname, key in PARAMS.items():
-        p = el.LookupParameter(pname)
-        if p is None or p.IsReadOnly:
-            continue
-        v = values[key]
-        try:
-            if isinstance(v, str):
-                p.Set(v)
-            elif pname in ("CT_PanelLength", "CT_PanelWidth"):
-                p.Set(float(v) * MM)                   # length params: feet
-            elif pname in ("CT_CoverArea", "CT_DevelopedArea"):
-                p.Set(float(v) * 10.7639104)           # area params: sq ft
-            else:
-                p.Set(float(v))                        # weight: plain number
-        except Exception:
-            pass
+def _write_comment(el, group_id, profile_name, panel):
     c = el.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
-    if c is not None:
-        c.Set("Cladding {} | {} | {} x {} mm".format(
-            group_id, values["profile"], values["width_mm"], values["length_mm"]))
+    if c is not None and not c.IsReadOnly:
+        c.Set(u"Cladding {} | {} | {:.0f} x {:.0f} mm".format(
+            group_id, profile_name, panel["width"], panel["length"]))
+
+
+def group_panels(doc, group_id):
+    return [ds for ds in FilteredElementCollector(doc).OfClass(DirectShape)
+            if ds.ApplicationId == APP_ID and ds.ApplicationDataId == group_id]
 
 
 def _schema():
