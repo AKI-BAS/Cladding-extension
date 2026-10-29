@@ -135,3 +135,22 @@ def get_inputs(el):
         else:
             out[name] = p.AsDouble()
     return out
+
+
+def get_outputs(el):
+    """Current calculated CT_ values (mm / m2 / number / text). None when unset."""
+    out = {}
+    for name, kind, _, _ in inputs.OUTPUTS:
+        p = el.LookupParameter(name)
+        if p is None or not p.HasValue:
+            out[name] = None
+        elif p.StorageType == StorageType.String:
+            out[name] = p.AsString()
+        elif kind == "length":
+            out[name] = p.AsDouble() / MM
+        elif kind == "area":
+            out[name] = p.AsDouble() / SQFT_PER_M2
+        else:
+            out[name] = p.AsDouble()
+    return out
+

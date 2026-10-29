@@ -49,7 +49,10 @@ else:
     candidates = [picked] + [p for p in panels if p.Id != picked.Id]
     try:
         for el in candidates:
-            r, c = inputs.apply_inputs(stored, revit_params.get_inputs(el), library)
+            el_data = revit_build.read_stored(el) or data
+            values, _ = inputs.requested_values(
+                revit_params.get_inputs(el), revit_params.get_outputs(el), el_data)
+            r, c = inputs.apply_inputs(stored, values, library)
             if c:
                 recipe, changes = r, c
                 break

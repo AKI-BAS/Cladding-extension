@@ -144,7 +144,6 @@ def build(doc, faces, recipe, group_id=None):
     recipe_values = inputs.recipe_inputs(r)
     created, skipped, all_panels = 0, 0, []
     refs = [ref.ConvertToStableRepresentation(doc) for ref, _ in faces]
-    payload = profiles.dumps({"group": group_id, "faces": refs, "recipe": r})
 
     for ref, face in faces:
         frame = FaceFrame(face)
@@ -170,7 +169,10 @@ def build(doc, faces, recipe, group_id=None):
             values.update(inputs.panel_outputs(group_id, panel, q))
             revit_params.set_values(ds, values)
             _write_comment(ds, group_id, recipe_values["CT_Profile"], panel)
-            _store(ds, payload)
+            _store(ds, profiles.dumps({
+                "group": group_id, "faces": refs, "recipe": r,
+                "panel": {"width": round(panel["width"], 2),
+                          "length": round(panel["length"], 2)}}))
             all_panels.append(panel)
             created += 1
     return group_id, created, skipped, layout.totals(all_panels, r)

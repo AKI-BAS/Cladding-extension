@@ -24,19 +24,34 @@ Reload pyRevit. A **CladdingTools** tab appears.
 ## Buttons
 - **Apply Cladding**: pick flat faces > choose profile and panel settings >
   live preview and quantities > Apply. Panels are Generic Models (DirectShapes).
-- **Regenerate**: edit the CT_ parameters on any panel in Properties, select a
-  panel, click. The whole group is rebuilt with the new values and follows the
-  host if it moved. Shift+Click to pick a new profile from a list instead.
+- **Regenerate**: rebuilds the selected cladding, e.g. after the wall moved.
+  Shift+Click to pick a new profile from a list. Usually not needed for
+  parameter edits, see Live update.
 - **Save Profile**: draw ONE module of a profile with detail lines in a drafting
   view (left to right, connected), select them, click. It is saved to
   `library/profiles/` and shows up in Apply Cladding.
+
+## Live update
+Change a CT_ value on any panel in Properties and click Apply: the whole
+cladding rebuilds straight away, in the same undo step.
+
+- **CT_PanelWidth**: type a width and the panels become that wide, snapped to
+  whole profile modules (1200 mm of 76 mm corrugation becomes 1216 mm).
+- **CT_PanelLength**: type a length and runs are split at that length or less.
+- The other inputs (profile, joint, standoff, orientation, material) work the same.
+- Calculated values (areas, weight, group) snap back if typed over.
+- A value that can't be used (unknown profile, size too small) is put back and
+  Revit shows a warning.
+
+Live update is switched on by `startup.py` when pyRevit loads. Cladding made
+with an older version needs one Regenerate before width/length edits work.
 
 ## Parameters
 The first time you apply cladding in a project, the tool creates these shared
 parameters on Generic Models (fixed GUIDs, so schedules and view filters carry
 over between projects). Your own shared parameter file setting is left alone.
 
-**Inputs** (edit, then Regenerate)
+**Inputs** (edit in Properties; rebuilds live)
 
 | Parameter | Type | Notes |
 |---|---|---|
@@ -48,7 +63,7 @@ over between projects). Your own shared parameter file setting is left alone.
 | CT_Orientation | Text | Vertical / Horizontal (Lóðrétt / Lárétt also work) |
 | CT_Material | Text | Material name in the project, blank for none |
 
-**Calculated** (for schedules; overwritten on Regenerate)
+**Calculated** (for schedules; CT_PanelWidth and CT_PanelLength can also be typed over to resize)
 
 | Parameter | Type |
 |---|---|

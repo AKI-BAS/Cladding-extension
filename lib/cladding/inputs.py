@@ -148,3 +148,58 @@ def apply_inputs(recipe, values, library):
             r["material"] = m
 
     return r, changes
+
+
+def requested_values(inputs_now, outputs_now, stored):
+    """Turn what's in Properties into apply_inputs() values.
+
+    Editing CT_PanelWidth means "make panels this wide" (cover width) and
+    editing CT_PanelLength means "split runs at this length" (max length).
+    Returns (values, outputs_edited): outputs_edited is True when a
+    calculated value (area, weight, group) was typed over and should be reset.
+    """
+    values = dict(inputs_now)
+    panel = stored.get("panel") or {}
+    edited = False
+    for name, key, target in (("CT_PanelWidth", "width", "CT_CoverWidth"),
+                              ("CT_PanelLength", "length", "CT_MaxLength")):
+        v = outputs_now.get(name)
+        if v is None or key not in panel:
+            continue
+        if abs(float(v) - float(panel[key])) > 0.5:
+            values[target] = float(v)
+    for name in ("CT_CoverArea", "CT_DevelopedArea", "CT_Weight", "CT_Group"):
+        if name in outputs_now and outputs_now[name] is not None:
+            expected = expected_output(name, stored)
+            if expected is None:
+                continue
+            got = outputs_now[name]
+            if isinstance(expected, float):
+                edited = edited or abs(float(got) - expected) > max(0.01, abs(expected) * 1e-3)
+            else:
+                edited = edited or got != expected
+    return values, edited
+
+
+def expected_output(name, stored):
+    from cladding import profiles
+    panel = stored.get("panel")
+    if name == "CT_Group":
+        return stored.get("group")
+    if not panel:
+        return None
+    q = profiles.panel_quantities(stored["recipe"]["profile"], panel["width"], panel["length"])
+    return float({"CT_CoverArea": q["cover_area_m2"],
+                  "CT_DevelopedArea": q["developed_area_m2"],
+                  "CT_Weight": q["weight_kg"]}[name])
+
+
+def stored_outputs(stored):
+    """The calculated CT_ values a panel should show, from its stored data."""
+    from cladding import profiles
+    panel = stored.get("panel")
+    if not panel:
+        return {}
+    q = profiles.panel_quantities(stored["recipe"]["profile"], panel["width"], panel["length"])
+    return panel_outputs(stored["group"], panel, q)
+
