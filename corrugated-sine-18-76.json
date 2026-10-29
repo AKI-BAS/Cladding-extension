@@ -1,0 +1,5 @@
+{
+  "name": "Corrugated 18/76",
+  "thickness": 0.7,
+  "pattern": [{"type": "sine", "width": 76, "depth": 18}]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Flat cassette",
+  "thickness": 1.5,
+  "density": 2700,
+  "pattern": [{"type": "flat", "width": 100}]
+}

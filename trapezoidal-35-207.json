@@ -1,0 +1,5 @@
+{
+  "name": "Trapezoidal 35/207",
+  "thickness": 0.7,
+  "pattern": [{"type": "trapezoid", "width": 207, "depth": 35, "top": 30, "bottom": 117}]
+}

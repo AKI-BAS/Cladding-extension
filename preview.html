@@ -1,0 +1,403 @@
+<title>CladdingTools Preview</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: instrument-panel on a soft studio floor — tools left, object centre, settings right; stacks on phone */
+:root{
+  --bg:#dfe2e6; --floor:#c3c8ce; --grid:rgba(40,46,54,.07);
+  --ink:#16181b; --ink-2:#4a5058; --muted:#8a9097; --line:#c6cbd1;
+  --tile:#e9ebee; --on-ink:#f4f5f7; --warn:#a8321f;
+  --sheet:#eef0f2; --shadow:rgba(22,24,27,.22);
+  --display:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --r:22px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#1d2024; --floor:#121417; --grid:rgba(220,226,234,.05);
+  --ink:#eceef1; --ink-2:#b5bbc3; --muted:#7d848d; --line:#3a3f46;
+  --tile:#25292e; --on-ink:#16181b; --warn:#ff8a73;
+  --sheet:#202328; --shadow:rgba(0,0,0,.28); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#1d2024; --floor:#121417; --grid:rgba(220,226,234,.05);
+  --ink:#eceef1; --ink-2:#b5bbc3; --muted:#7d848d; --line:#3a3f46;
+  --tile:#25292e; --on-ink:#16181b; --warn:#ff8a73;
+  --sheet:#202328; --shadow:rgba(0,0,0,.28); color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--display);font-size:14px;
+  -webkit-font-smoothing:antialiased}
+.stage{position:relative;min-height:100vh;
+  background:
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/100% 56px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/56px 100%,
+    linear-gradient(180deg,var(--bg) 0%,var(--bg) 38%,var(--floor) 100%);
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:16px 110px}
+
+/* top bar */
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;max-width:1180px;margin:0 auto}
+.sq{width:56px;height:56px;border-radius:18px;background:var(--ink);color:var(--on-ink);
+  display:grid;place-items:center;border:0;cursor:pointer;flex:none}
+.sq svg{width:22px;height:22px}
+.meta{flex:1;min-width:0;padding-top:6px}
+.meta h1{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.meta p{margin:3px 0 0;color:var(--muted);font-size:12px}
+
+/* main grid */
+.app{max-width:1180px;margin:22px auto 0;display:grid;gap:22px;
+  grid-template-columns:1fr;grid-template-areas:"view" "profiles" "panel" "finish" "qty"}
+@media (min-width:920px){
+  .app{grid-template-columns:220px minmax(0,1fr) 250px;
+    grid-template-areas:"profiles view panel" "profiles view finish" "qty qty qty";align-items:start}
+}
+.lbl{color:var(--muted);font-size:11px;letter-spacing:.04em;margin:0 0 10px}
+
+/* profiles */
+.profiles{grid-area:profiles;min-width:0}
+.plist{display:flex;gap:4px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+@media (min-width:920px){.plist{flex-direction:column;overflow:visible}}
+.pitem{display:flex;align-items:center;gap:12px;padding:10px 12px;border:0;background:none;color:var(--ink);
+  font:500 13px var(--display);cursor:pointer;text-align:left;white-space:nowrap;flex:none;border-radius:0}
+.pitem svg{width:34px;height:20px;flex:none;overflow:visible}
+.pitem svg path{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linejoin:round}
+.pitem[aria-pressed="true"]{background:var(--ink);color:var(--on-ink);font-weight:600}
+.pitem.add{color:var(--ink-2)}
+.pitem:focus-visible,.tile:focus-visible,.seg button:focus-visible,.sq:focus-visible,.btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+/* viewport */
+.view{grid-area:view;position:relative;min-width:0}
+.canvas-wrap{position:relative;aspect-ratio:1/1;max-height:520px;width:100%;max-width:100%;margin:0 auto;touch-action:pan-y}
+#view{width:100%;height:100%;display:block;cursor:grab}
+.dial{text-align:center;margin-top:-6px}
+.dial small{display:block;color:var(--muted);font-size:12px}
+.dial b{font:400 34px/1.1 var(--display);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.axis{position:absolute;left:8%;bottom:4%;font:500 10px var(--mono);color:var(--muted)}
+.badge{position:absolute;right:0;top:0;font:500 10px var(--mono);color:var(--muted);text-align:right;line-height:1.5}
+
+/* panel controls */
+.panel{grid-area:panel;min-width:0}
+.row{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:4px 12px;margin-bottom:14px}
+.row label{font-size:12px;color:var(--ink-2)}
+.row output{font:500 12px var(--mono);font-variant-numeric:tabular-nums}
+.row input[type=range]{grid-column:1/-1;width:100%;margin:0;accent-color:var(--ink);height:18px}
+.hint{font:400 11px var(--mono);color:var(--muted);margin:-8px 0 14px}
+.seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line)}
+.seg button{border:0;background:none;color:var(--ink);font:500 12px var(--display);padding:9px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--on-ink)}
+
+/* finish tiles (like the lighting tiles in the reference) */
+.finish{grid-area:finish;min-width:0}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{position:relative;aspect-ratio:1.15/1;border:1px solid var(--line);background:var(--tile);color:var(--ink);
+  text-align:left;padding:10px;cursor:pointer;font:500 12px var(--display);display:flex;align-items:flex-end}
+.tile svg{position:absolute;top:9px;right:9px;width:24px;height:24px}
+.tile[aria-pressed="true"]{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}
+.tile .lvl{position:absolute;top:10px;left:10px;font:500 9px var(--mono);opacity:.6}
+.swatches{display:flex;gap:10px;margin-top:14px}
+.sw{width:30px;height:30px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;outline-offset:2px}
+.sw[aria-pressed="true"]{border-color:var(--ink)}
+.note{font-size:11px;color:var(--muted);line-height:1.45;margin:12px 0 0;max-width:34ch}
+
+/* quantities */
+.qty{grid-area:qty;border-top:1px solid var(--line);padding-top:16px}
+.qgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px}
+.q small{display:block;color:var(--muted);font-size:11px}
+.q b{font:400 22px/1.3 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.q b span{font-size:12px;color:var(--muted);margin-left:3px}
+.example{font:400 11px var(--mono);color:var(--muted);margin-top:10px}
+
+/* fixed corners */
+.mark{position:fixed;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  border:1px solid var(--ink);padding:5px 7px;font:600 10px/1.05 var(--display);letter-spacing:.02em;background:var(--bg);z-index:5}
+.apply{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  height:64px;border-radius:22px;padding:0 22px;width:auto;gap:10px;display:flex;align-items:center;font:600 14px var(--display);z-index:5}
+.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);
+  background:var(--ink);color:var(--on-ink);padding:10px 14px;font-size:12px;max-width:calc(100% - 32px);z-index:6}
+
+/* draw sheet */
+.sheet{position:fixed;inset:0;z-index:20;background:var(--sheet);display:flex;flex-direction:column;
+  padding:calc(16px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.sheet-head{display:flex;align-items:center;gap:12px;max-width:900px;width:100%;margin:0 auto}
+.sheet-head h2{margin:0;font-size:15px;font-weight:600;flex:1}
+.sheet-body{flex:1;min-height:0;max-width:900px;width:100%;margin:16px auto 0;display:flex;flex-direction:column;gap:12px}
+#draw{width:100%;flex:1;min-height:220px;background:var(--bg);border:1px solid var(--line);touch-action:none;cursor:crosshair}
+.dstats{display:flex;flex-wrap:wrap;gap:6px 18px;font:500 12px var(--mono);font-variant-numeric:tabular-nums}
+.dstats span{color:var(--muted)}
+.dactions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--ink);background:none;color:var(--ink);font:500 13px var(--display);padding:10px 16px;cursor:pointer}
+.btn.primary{background:var(--ink);color:var(--on-ink)}
+.btn:disabled{opacity:.4;cursor:default}
+.field{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2)}
+.field input{width:9em;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);font:500 13px var(--display);padding:4px 0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="stage">
+  <header class="top">
+    <button class="sq" id="back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 4 7 12l8 8"/></svg></button>
+    <div class="meta">
+      <h1>Apply Cladding</h1>
+      <p id="facesMeta">Example: 2 picked faces · W-03 east, 6.0 × 4.2 m</p>
+    </div>
+    <button class="sq" id="themeBtn" aria-label="Switch light or dark"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg></button>
+  </header>
+
+  <main class="app">
+    <section class="profiles" aria-label="Profiles">
+      <p class="lbl">Profiles</p>
+      <div class="plist" id="plist"></div>
+    </section>
+
+    <section class="view" aria-label="Preview">
+      <div class="badge" id="badge"></div>
+      <div class="canvas-wrap"><canvas id="view" aria-label="3D preview of a cladding bay. Drag sideways to rotate."></canvas></div>
+      <div class="axis">Y ↑ · X → · Z ⊙</div>
+      <div class="dial"><small>Rotation</small><b id="angleOut">35°</b></div>
+    </section>
+
+    <section class="panel" aria-label="Panel">
+      <p class="lbl">Panel</p>
+      <div class="row"><label for="cover">Cover width</label><output id="coverOut"></output>
+        <input type="range" id="cover" min="300" max="1500" step="10" value="1000"></div>
+      <p class="hint" id="snapHint"></p>
+      <div class="row"><label for="maxlen">Max length</label><output id="maxlenOut"></output>
+        <input type="range" id="maxlen" min="1000" max="12000" step="100" value="3000"></div>
+      <div class="row"><label for="joint">Joint</label><output id="jointOut"></output>
+        <input type="range" id="joint" min="0" max="40" step="1" value="10"></div>
+      <div class="row"><label for="standoff">Standoff</label><output id="standoffOut"></output>
+        <input type="range" id="standoff" min="0" max="150" step="5" value="30"></div>
+      <p class="lbl" style="margin-top:4px">Orientation</p>
+      <div class="seg" id="orient">
+        <button aria-pressed="true" data-v="vertical">Vertical ribs</button>
+        <button aria-pressed="false" data-v="horizontal">Horizontal ribs</button>
+      </div>
+    </section>
+
+    <section class="finish" aria-label="Finish">
+      <p class="lbl">Finish</p>
+      <div class="tiles" id="tiles">
+        <button class="tile" aria-pressed="true" data-v="plain"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16"/></svg>Plain</button>
+        <button class="tile" aria-pressed="false" data-v="perforated"><span class="lvl">L1</span><svg viewBox="0 0 24 24" fill="currentColor"><g id="dots"><circle cx="6" cy="6" r="1.4"/><circle cx="12" cy="6" r="1.4"/><circle cx="18" cy="6" r="1.4"/><circle cx="9" cy="11" r="1.4"/><circle cx="15" cy="11" r="1.4"/><circle cx="6" cy="16" r="1.4"/><circle cx="12" cy="16" r="1.4"/><circle cx="18" cy="16" r="1.4"/></g></svg>Perforated</button>
+        <button class="tile" aria-pressed="false" data-v="embossed"><span class="lvl">L2</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 8l4-4M4 14L14 4M4 20L20 4M10 20l10-10M16 20l4-4"/></svg>Embossed</button>
+        <button class="tile" aria-pressed="false" data-v="matte"><span class="lvl">L2</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="7"/></svg>Matte</button>
+      </div>
+      <div class="swatches" id="swatches"></div>
+      <p class="note" id="finishNote">The profile is real geometry. Finishes are material maps, so perforations show in Ray Trace and render plugins, not in Realistic.</p>
+    </section>
+
+    <section class="qty" aria-label="Quantities">
+      <p class="lbl">Quantities</p>
+      <div class="qgrid">
+        <div class="q"><small>Panels</small><b id="qCount">0</b></div>
+        <div class="q"><small>Run length</small><b id="qLen">0<span>m</span></b></div>
+        <div class="q"><small>Cover area</small><b id="qCover">0<span>m²</span></b></div>
+        <div class="q"><small>Sheet area (unfolded)</small><b id="qDev">0<span>m²</span></b></div>
+        <div class="q"><small>Weight</small><b id="qWt">0<span>kg</span></b></div>
+      </div>
+      <p class="example">Example faces, 6.0 × 4.2 m and 3.6 × 4.2 m. In Revit these come from the faces you pick.</p>
+    </section>
+  </main>
+
+  <div class="mark" aria-hidden="true">CLAD<br>TOOLS<br>v0.1 .</div>
+  <button class="sq apply" id="applyBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>Apply to faces</button>
+  <div class="toast" id="toast" hidden></div>
+</div>
+
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="sheet-head">
+    <button class="sq" id="closeSheet" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <h2 id="sheetTitle">Draw profile</h2>
+  </div>
+  <div class="sheet-body">
+    <p class="note" style="margin:0;max-width:60ch">Tap to place points left to right, one repeat module. Points snap to 5 mm. In Revit the same thing is done with detail lines and Save Profile.</p>
+    <canvas id="draw"></canvas>
+    <div class="dstats" id="dstats"></div>
+    <div class="dactions">
+      <div class="field"><label for="pname">Name</label><input id="pname" value="My profile"></div>
+      <div class="field"><label for="pthk">t (mm)</label><input id="pthk" value="0.7" inputmode="decimal" style="width:4em"></div>
+    </div>
+    <div class="dactions">
+      <button class="btn" id="undoPt">Undo point</button>
+      <button class="btn" id="clearPt">Clear</button>
+      <button class="btn primary" id="savePt">Use profile</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- profile maths (mirrors lib/cladding/profiles.py) ---------- */
+const LIB=[
+ {name:"Corrugated 18/76",thickness:0.7,pattern:[{type:"sine",width:76,depth:18}]},
+ {name:"Trapezoidal 35/207",thickness:0.7,pattern:[{type:"trapezoid",width:207,depth:35,top:30,bottom:117}]},
+ {name:"Standing seam 500",thickness:0.6,pattern:[{type:"seam",width:500,depth:25,seam:20}]},
+ {name:"Flat cassette",thickness:1.5,density:2700,pattern:[{type:"flat",width:100}]},
+ {name:"Zigzag rhythm 3-1",thickness:0.7,pattern:[{type:"zig",width:40,depth:25},{type:"zig",width:40,depth:25},{type:"zig",width:40,depth:25},{type:"flat",width:60},{type:"zig",width:80,depth:40}]}
+];
+function patternToPoints(pattern,samples=10){
+  const pts=[[0,0]];let x=0;
+  for(const s of pattern){const w=+s.width,d=+(s.depth||0);
+    if(s.type==="flat")pts.push([x+w,0]);
+    else if(s.type==="zig"){pts.push([x+w/2,d]);pts.push([x+w,0]);}
+    else if(s.type==="sine"){for(let i=1;i<=samples;i++){const a=2*Math.PI*i/samples;pts.push([x+w*i/samples,d*(1-Math.cos(a))/2]);}}
+    else if(s.type==="trapezoid"){const top=s.top??w*.25,bot=s.bottom??w*.25,sl=(w-top-bot)/2;
+      pts.push([x+bot/2,0],[x+bot/2+sl,d],[x+bot/2+sl+top,d],[x+w-bot/2,0],[x+w,0]);}
+    else if(s.type==="seam"){const sm=s.seam??25;pts.push([x+w-sm,0],[x+w-sm,d],[x+w,d],[x+w,0]);}
+    x+=w;}
+  return clean(pts);
+}
+function clean(pts,tol=.01){const o=[];for(const p of pts){const l=o[o.length-1];if(!l||Math.abs(p[0]-l[0])>tol||Math.abs(p[1]-l[1])>tol)o.push(p);}
+  let i=1;while(i<o.length-1){const[a,b,c]=[o[i-1],o[i],o[i+1]];const cr=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);if(Math.abs(cr)<tol)o.splice(i,1);else i++;}return o;}
+const profilePoints=p=>clean(p.points?p.points.map(q=>[+q[0],+q[1]]):patternToPoints(p.pattern));
+const moduleW=pts=>pts[pts.length-1][0]-pts[0][0];
+const depthOf=pts=>{const z=pts.map(p=>p[1]);return Math.max(...z)-Math.min(...z);};
+const plen=pts=>{let t=0;for(let i=1;i<pts.length;i++)t+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);return t;};
+function tile(pts,width){const m=moduleW(pts),x0=pts[0][0],base=pts.map(p=>[p[0]-x0,p[1]]),out=[];
+  const n=Math.ceil(width/m)+1;for(let k=0;k<n;k++)base.forEach((p,i)=>{if(k>0&&i===0)return;out.push([p[0]+k*m,p[1]]);});
+  return clip(out,0,width);}
+function clip(pts,a0,a1){const o=[];for(let i=0;i<pts.length-1;i++){const a=pts[i],b=pts[i+1];
+  if(a[0]>=a0&&a[0]<=a1)o.push(a);for(const e of[a0,a1])if((a[0]-e)*(b[0]-e)<0){const t=(e-a[0])/(b[0]-a[0]);o.push([e,a[1]+t*(b[1]-a[1])]);}}
+  const l=pts[pts.length-1];if(l[0]>=a0&&l[0]<=a1)o.push(l);return clean(o);}
+function snapped(r){const m=moduleW(profilePoints(r.profile));return Math.max(1,Math.round(r.cover/m))*m;}
+function layout(ext,r){const[u0,u1,v0,v1]=ext,cover=snapped(r),j=r.joint,ml=r.maxlen,H=r.orientation==="horizontal";
+  const across=H?[v0,v1]:[u0,u1],along=H?[u0,u1]:[v0,v1],out=[];let a=across[0];
+  while(a<across[1]-1){const w=Math.min(cover,across[1]-a),run=along[1]-along[0];
+    const pieces=Math.max(1,Math.ceil((run+j)/(ml+j))),pl=(run-j*(pieces-1))/pieces;
+    for(let k=0;k<pieces;k++){const b=along[0]+k*(pl+j);out.push(H?{u0:b,v0:a,width:w,length:pl}:{u0:a,v0:b,width:w,length:pl});}
+    a+=w+j;}return out;}
+function quantities(faces,r){const pts=profilePoints(r.profile),t=r.profile.thickness??.7,dens=r.profile.density??7850;
+  let c=0,len=0,cov=0,dev=0;for(const f of faces)for(const p of layout([0,f[0],0,f[1]],r)){c++;len+=p.length/1000;cov+=p.width*p.length/1e6;dev+=plen(tile(pts,p.width))*p.length/1e6;}
+  return{count:c,len,cov,dev,wt:dev*t/1000*dens};}
+
+/* ---------- state ---------- */
+const S={lib:LIB.slice(),sel:0,cover:1000,maxlen:3000,joint:10,standoff:30,orientation:"vertical",finish:"plain",color:0,angle:35};
+const COLORS=[{n:"Zinc",c:[176,184,192]},{n:"Anthracite",c:[74,80,88]},{n:"Corten",c:[150,82,48]},{n:"Signal white",c:[232,232,226]}];
+const FACES=[[6000,4200],[3600,4200]];
+const $=id=>document.getElementById(id);
+const recipe=()=>({profile:S.lib[S.sel],cover:S.cover,maxlen:S.maxlen,joint:S.joint,standoff:S.standoff,orientation:S.orientation});
+
+/* ---------- profile list with live thumbnails ---------- */
+function thumbPath(p){const pts=tile(profilePoints(p),Math.max(moduleW(profilePoints(p))*1.0,240));
+  const W=moduleW(pts)||1,D=Math.max(depthOf(pts),1);const sx=34/W,sz=Math.min(14/D,sx*2.2);
+  return"M"+pts.map(q=>(q[0]*sx).toFixed(2)+" "+(17-q[1]*sz).toFixed(2)).join(" L");}
+function renderList(){const el=$("plist");el.innerHTML="";
+  S.lib.forEach((p,i)=>{const b=document.createElement("button");b.className="pitem";b.setAttribute("aria-pressed",i===S.sel);
+    b.innerHTML=`<svg viewBox="0 0 34 20"><path d="${thumbPath(p)}"/></svg>`;b.append(p.name);
+    b.onclick=()=>{S.sel=i;renderList();update();};el.append(b);});
+  const add=document.createElement("button");add.className="pitem add";
+  add.innerHTML='<svg viewBox="0 0 34 20"><path d="M17 4v12M11 10h12"/></svg>Draw profile';add.onclick=openSheet;el.append(add);}
+
+/* ---------- 3D preview (mirrors lib/cladding/preview.py) ---------- */
+const cv=$("view"),ctx=cv.getContext("2d");let patDots=null,patHatch=null;
+function makePatterns(dpr){const mk=(fn)=>{const c=document.createElement("canvas");c.width=c.height=Math.round(8*dpr);const g=c.getContext("2d");g.scale(dpr,dpr);fn(g);return ctx.createPattern(c,"repeat");};
+  patDots=mk(g=>{g.fillStyle="rgba(10,12,14,.75)";[[2,2],[6,6]].forEach(([x,y])=>{g.beginPath();g.arc(x,y,1.05,0,7);g.fill();});});
+  patHatch=mk(g=>{g.strokeStyle="rgba(255,255,255,.22)";g.lineWidth=.8;g.beginPath();g.moveTo(0,8);g.lineTo(8,0);g.stroke();});}
+function draw(){
+  const dpr=Math.min(window.devicePixelRatio||1,2),rect=cv.getBoundingClientRect(),W=rect.width,H=rect.height;
+  if(W<10)return;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);makePatterns(dpr);
+  ctx.clearRect(0,0,W,H);
+  const r=recipe(),bayW=2400,bayH=1800,panels=layout([0,bayW,0,bayH],r);
+  const a=S.angle*Math.PI/180,tl=18*Math.PI/180,ca=Math.cos(a),sa=Math.sin(a),ct=Math.cos(tl),st=Math.sin(tl);
+  const L=(v=>{const m=Math.hypot(...v);return v.map(c=>c/m);})([-.45,.55,.7]),ex=2;
+  const H_=r.orientation==="horizontal",pts=profilePoints(r.profile);
+  const proj=(x,y,z)=>{x-=bayW/2;y-=bayH/2;z=z*ex;const rx=x*ca+z*sa,rz=-x*sa+z*ca;return[rx,y*ct-rz*st,y*st+rz*ct];};
+  const quads=[];
+  for(const p of panels){const tp=tile(pts,p.width);
+    for(let i=0;i<tp.length-1;i++){const[x1,z1]=tp[i],[x2,z2]=tp[i+1];let c,n;
+      if(H_){c=[[p.u0,p.v0+x1,z1],[p.u0,p.v0+x2,z2],[p.u0+p.length,p.v0+x2,z2],[p.u0+p.length,p.v0+x1,z1]];n=[0,-(z2-z1),x2-x1];}
+      else{c=[[p.u0+x1,p.v0,z1],[p.u0+x2,p.v0,z2],[p.u0+x2,p.v0+p.length,z2],[p.u0+x1,p.v0+p.length,z1]];n=[-(z2-z1),0,x2-x1];}
+      const m=Math.hypot(...n)||1;n=n.map(q=>q/m);
+      const nx=n[0]*ca+n[2]*sa,nz=-n[0]*sa+n[2]*ca,ny=n[1]*ct-nz*st,nz2=n[1]*st+nz*ct;
+      const sh=Math.max(0,nx*L[0]+ny*L[1]+nz2*L[2]);const pr=c.map(q=>proj(...q));
+      quads.push({d:pr.reduce((s,q)=>s+q[2],0)/4,pr,sh:.28+.72*sh});}}
+  quads.sort((A,B)=>A.d-B.d);
+  let xs=[],ys=[];quads.forEach(q=>q.pr.forEach(p=>{xs.push(p[0]);ys.push(p[1]);}));
+  const span=Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))||1,sc=.66*Math.min(W,H)/span;
+  const cx=(Math.max(...xs)+Math.min(...xs))/2,cy=(Math.max(...ys)+Math.min(...ys))/2,oy=H*.44;
+  const S2=(p)=>[W/2+(p[0]-cx)*sc,oy-(p[1]-cy)*sc];
+  // floor ring + shadow
+  const ringY=oy+(Math.max(...ys)-cy)*sc*0+ (cy-Math.min(...ys))*sc+18;
+  const _cs=getComputedStyle(document.documentElement),cs={getPropertyValue:k=>_cs.getPropertyValue(k).trim()};
+  const g=ctx.createRadialGradient(W/2,ringY-4,4,W/2,ringY-4,W*.32);g.addColorStop(0,cs.getPropertyValue("--shadow"));g.addColorStop(1,"transparent");
+  ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(W/2,ringY-4,W*.32,W*.07,0,0,7);ctx.fill();
+  ctx.strokeStyle=cs.getPropertyValue("--muted");ctx.lineWidth=1;ctx.beginPath();ctx.ellipse(W/2,ringY,W*.42,W*.11,0,0,7);ctx.stroke();
+  ctx.strokeStyle=cs.getPropertyValue("--ink");ctx.lineWidth=4;ctx.lineCap="round";ctx.beginPath();
+  const t0=Math.PI/2-S.angle*Math.PI/180*.5;ctx.ellipse(W/2,ringY,W*.42,W*.11,0,t0-.2,t0+.2);ctx.stroke();
+  // panels
+  const col=COLORS[S.color].c;
+  for(const q of quads){const s=q.pr.map(S2);ctx.beginPath();ctx.moveTo(...s[0]);for(let i=1;i<4;i++)ctx.lineTo(...s[i]);ctx.closePath();
+    const k=S.finish==="matte"?(.55+.45*q.sh):q.sh;const f=c=>Math.round(Math.min(255,c*(.35+.85*k)));
+    ctx.fillStyle=`rgb(${f(col[0])},${f(col[1])},${f(col[2])})`;ctx.fill();
+    if(S.finish==="perforated"){ctx.save();ctx.globalAlpha=.55;ctx.fillStyle=patDots;ctx.fill();ctx.restore();}
+    if(S.finish==="embossed"){ctx.fillStyle=patHatch;ctx.fill();}
+    ctx.strokeStyle="rgba(20,22,25,.28)";ctx.lineWidth=.5;ctx.stroke();}
+  $("badge").innerHTML=`${panels.length} panels in sample bay<br>2.4 × 1.8 m · depth ×${ex}`;
+}
+
+/* ---------- update everything ---------- */
+function update(){const r=recipe(),pts=profilePoints(r.profile),sn=snapped(r);
+  $("coverOut").textContent=S.cover+" mm";$("maxlenOut").textContent=(S.maxlen/1000).toFixed(1)+" m";
+  $("jointOut").textContent=S.joint+" mm";$("standoffOut").textContent=S.standoff+" mm";
+  $("snapHint").textContent=`snaps to ${Math.round(sn)} mm · ${Math.round(sn/moduleW(pts))} × ${moduleW(pts).toFixed(0)} mm module · depth ${depthOf(pts).toFixed(0)} mm`;
+  $("angleOut").textContent=Math.round(S.angle)+"°";
+  const q=quantities(FACES,r);const n=(v,d)=>v.toLocaleString("en-GB",{minimumFractionDigits:d,maximumFractionDigits:d});
+  $("qCount").textContent=q.count;$("qLen").innerHTML=n(q.len,1)+"<span>m</span>";$("qCover").innerHTML=n(q.cov,1)+"<span>m²</span>";
+  $("qDev").innerHTML=n(q.dev,1)+"<span>m²</span>";$("qWt").innerHTML=n(q.wt,0)+"<span>kg</span>";
+  draw();}
+
+/* ---------- controls ---------- */
+["cover","maxlen","joint","standoff"].forEach(id=>$(id).addEventListener("input",e=>{S[id]=+e.target.value;update();}));
+document.querySelectorAll("#orient button").forEach(b=>b.onclick=()=>{S.orientation=b.dataset.v;document.querySelectorAll("#orient button").forEach(x=>x.setAttribute("aria-pressed",x===b));update();});
+document.querySelectorAll("#tiles .tile").forEach(b=>b.onclick=()=>{S.finish=b.dataset.v;document.querySelectorAll("#tiles .tile").forEach(x=>x.setAttribute("aria-pressed",x===b));draw();});
+COLORS.forEach((c,i)=>{const b=document.createElement("button");b.className="sw";b.title=c.n;b.setAttribute("aria-label",c.n);
+  b.style.background=`rgb(${c.c})`;b.setAttribute("aria-pressed",i===0);b.onclick=()=>{S.color=i;document.querySelectorAll(".sw").forEach((x,j)=>x.setAttribute("aria-pressed",j===i));draw();};$("swatches").append(b);});
+let drag=null;cv.addEventListener("pointerdown",e=>{drag={x:e.clientX,a:S.angle};cv.setPointerCapture(e.pointerId);cv.style.cursor="grabbing";});
+cv.addEventListener("pointermove",e=>{if(!drag)return;S.angle=Math.max(-80,Math.min(80,drag.a+(e.clientX-drag.x)*.4));$("angleOut").textContent=Math.round(S.angle)+"°";draw();});
+cv.addEventListener("pointerup",()=>{drag=null;cv.style.cursor="grab";});
+new ResizeObserver(draw).observe(cv);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);
+$("themeBtn").onclick=()=>{const d=document.documentElement,cur=d.dataset.theme||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");d.dataset.theme=cur==="dark"?"light":"dark";draw();};
+function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>el.hidden=true,2600);}
+$("applyBtn").onclick=()=>{const q=quantities(FACES,recipe());toast(`Preview only. In Revit this creates ${q.count} ${S.lib[S.sel].name} panels.`);};
+$("back").onclick=()=>toast("In Revit this closes the dialog without changes.");
+
+/* ---------- draw-profile sheet ---------- */
+const dc=$("draw"),dx=dc.getContext("2d");let dpts=[[0,0]];const RANGE={x:320,z:80};let dview=null;
+function openSheet(){$("sheet").hidden=false;dpts=[[0,0],[40,25],[80,0],[120,25],[160,0],[220,0],[260,40],[300,0]];drawEd();$("closeSheet").focus();}
+function closeSheet(){$("sheet").hidden=true;}
+$("closeSheet").onclick=closeSheet;document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("sheet").hidden)closeSheet();});
+function edMap(){const r=dc.getBoundingClientRect(),pad=34,W=r.width,H=r.height;const s=Math.min((W-2*pad)/RANGE.x,(H-2*pad)/RANGE.z);
+  const ox=(W-RANGE.x*s)/2,oy=H-(H-RANGE.z*s)/2;return{W,H,s,ox,oy,to:(x,z)=>[ox+x*s,oy-z*s],from:(px,py)=>[(px-ox)/s,(oy-py)/s]};}
+function drawEd(){const dpr=Math.min(devicePixelRatio||1,2),m=edMap();dc.width=m.W*dpr;dc.height=m.H*dpr;dx.setTransform(dpr,0,0,dpr,0,0);dview=m;
+  const _c2=getComputedStyle(document.documentElement),cs={getPropertyValue:k=>_c2.getPropertyValue(k).trim()},ink=cs.getPropertyValue("--ink"),mu=cs.getPropertyValue("--muted"),ln=cs.getPropertyValue("--line");
+  dx.clearRect(0,0,m.W,m.H);dx.strokeStyle=ln;dx.lineWidth=1;
+  for(let x=0;x<=RANGE.x;x+=10){dx.globalAlpha=x%50?.35:1;dx.beginPath();dx.moveTo(...m.to(x,0));dx.lineTo(...m.to(x,RANGE.z));dx.stroke();}
+  for(let z=0;z<=RANGE.z;z+=10){dx.globalAlpha=z%50?.35:1;dx.beginPath();dx.moveTo(...m.to(0,z));dx.lineTo(...m.to(RANGE.x,z));dx.stroke();}
+  dx.globalAlpha=1;dx.fillStyle=mu;dx.font="10px "+cs.getPropertyValue("--mono");
+  for(let x=0;x<=RANGE.x;x+=50){const[p,q]=m.to(x,0);dx.fillText(x,p-6,q+14);}
+  dx.fillText("mm",m.to(RANGE.x,0)[0]-14,m.to(0,0)[1]+26);
+  // ghost repeat
+  if(dpts.length>1){const w=dpts[dpts.length-1][0];dx.strokeStyle=mu;dx.setLineDash([3,4]);dx.beginPath();
+    dpts.forEach((p,i)=>{const[a,b]=m.to(p[0]+w,p[1]);if(a<=m.to(RANGE.x,0)[0]+1)(i?dx.lineTo(a,b):dx.moveTo(a,b));});dx.stroke();dx.setLineDash([]);}
+  dx.strokeStyle=ink;dx.lineWidth=2.2;dx.lineJoin="round";dx.beginPath();dpts.forEach((p,i)=>{const[a,b]=m.to(...p);i?dx.lineTo(a,b):dx.moveTo(a,b);});dx.stroke();
+  dx.fillStyle=ink;dx.font="500 10px "+cs.getPropertyValue("--mono");
+  for(let i=0;i<dpts.length;i++){const[a,b]=m.to(...dpts[i]);dx.beginPath();dx.arc(a,b,3.5,0,7);dx.fill();
+    if(i){const[p0,q0]=m.to(...dpts[i-1]);const L=Math.hypot(dpts[i][0]-dpts[i-1][0],dpts[i][1]-dpts[i-1][1]);
+      dx.fillStyle=mu;dx.fillText(L.toFixed(0),(a+p0)/2+4,(b+q0)/2-6);dx.fillStyle=ink;}}
+  const pts=clean(dpts.map(p=>p.slice()));const ok=pts.length>1&&moduleW(pts)>0;
+  $("dstats").innerHTML=ok?`<div><span>module</span> ${moduleW(pts).toFixed(0)} mm</div><div><span>depth</span> ${depthOf(pts).toFixed(0)} mm</div><div><span>sheet/module</span> ${plen(pts).toFixed(0)} mm</div><div><span>ratio</span> ${(plen(pts)/moduleW(pts)).toFixed(2)}</div><div><span>points</span> ${pts.length}</div>`:"<div><span>Tap the grid to place the next point</span></div>";
+  $("savePt").disabled=!ok;$("undoPt").disabled=dpts.length<2;}
+dc.addEventListener("pointerdown",e=>{const r=dc.getBoundingClientRect();let[x,z]=dview.from(e.clientX-r.left,e.clientY-r.top);
+  x=Math.round(x/5)*5;z=Math.round(z/5)*5;z=Math.max(0,Math.min(RANGE.z,z));const last=dpts[dpts.length-1];
+  if(x<last[0])x=last[0];if(x>RANGE.x)x=RANGE.x;if(x===last[0]&&z===last[1])return;dpts.push([x,z]);drawEd();});
+$("undoPt").onclick=()=>{if(dpts.length>1)dpts.pop();drawEd();};
+$("clearPt").onclick=()=>{dpts=[[0,0]];drawEd();};
+$("savePt").onclick=()=>{const t=parseFloat($("pthk").value.replace(",","."))||.7;const name=$("pname").value.trim()||"My profile";
+  const z0=Math.min(...dpts.map(p=>p[1]));S.lib.push({name,thickness:t,points:dpts.map(p=>[p[0],p[1]-z0])});S.sel=S.lib.length-1;closeSheet();renderList();update();
+  toast(`${name} added. In Revit it saves to library/profiles.`);};
+new ResizeObserver(()=>{if(!$("sheet").hidden)drawEd();}).observe(dc);
+
+renderList();update();
+</script>
