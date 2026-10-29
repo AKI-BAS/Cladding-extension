@@ -5,11 +5,21 @@ and your own drawn profiles, laid out as real panels on wall, roof, floor and
 ceiling faces, with quantities.
 
 ## Install
-1. Copy the `CladdingTools.extension` folder somewhere permanent
-   (a Git repo or a shared studio folder works well).
-2. pyRevit tab > Settings > Custom Extension Directories > add the folder that
-   *contains* `CladdingTools.extension`.
-3. Reload pyRevit. A **CladdingTools** tab appears.
+**From Git (recommended):** clone this repo into pyRevit's extensions folder,
+named with the `.extension` suffix:
+
+```
+git clone https://github.com/AKI-BAS/Cladding-extension.git "%APPDATA%\pyRevit\Extensions\CladdingTools.extension"
+```
+Update later with `git pull` in that folder, then Reload in pyRevit.
+
+**Manually:** download the ZIP and put its contents in
+`%APPDATA%\pyRevit\Extensions\CladdingTools.extension\` so that
+`CladdingTools.tab` sits directly inside it.
+
+Reload pyRevit. A **CladdingTools** tab appears.
+
+`preview.html` is a standalone browser mock-up of the dialog; Revit doesn't use it.
 
 ## Buttons
 - **Apply Cladding**: pick flat faces > choose profile and panel settings >

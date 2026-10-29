@@ -3,6 +3,8 @@
 __title__ = "Apply\nCladding"
 __doc__ = "Pick wall, roof, floor or ceiling faces and clad them with a profiled sheet."
 
+import os
+
 from pyrevit import revit, forms, script
 from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.DB import FilteredElementCollector, Material, PlanarFace
@@ -16,6 +18,7 @@ from cladding import profiles, layout, preview, revit_build
 
 doc = revit.doc
 uidoc = revit.uidoc
+XAML = os.path.join(os.path.dirname(__file__), "ui.xaml")
 
 
 def pick_faces():
@@ -38,13 +41,16 @@ def pick_faces():
 
 
 class CladdingWindow(forms.WPFWindow):
+    # Class-level so XAML events that fire while the window loads are ignored
+    _ready = False
+
     def __init__(self, faces, library):
-        forms.WPFWindow.__init__(self, "ui.xaml")
+        forms.WPFWindow.__init__(self, XAML)
         self.faces = faces
         self.frames = [revit_build.FaceFrame(f) for _, f in faces]
         self.result = None
-        self._ready = False
-        self.ProfileList.ItemsSource = [_Item(p) for p in library]
+        self.library = library
+        self.ProfileList.ItemsSource = [p.get("name", "Unnamed") for p in library]
         names = sorted(m.Name for m in FilteredElementCollector(doc).OfClass(Material))
         self.MaterialBox.ItemsSource = ["(none)"] + names
         self.MaterialBox.SelectedIndex = 0
@@ -54,8 +60,8 @@ class CladdingWindow(forms.WPFWindow):
 
     # ----------------------------------------------------------------- input
     def recipe(self):
-        item = self.ProfileList.SelectedItem
-        if item is None:
+        i = self.ProfileList.SelectedIndex
+        if i < 0:
             raise ValueError("Pick a profile.")
 
         def num(box, label, minimum):
@@ -69,7 +75,7 @@ class CladdingWindow(forms.WPFWindow):
 
         mat = self.MaterialBox.SelectedItem
         return {
-            "profile": item.profile,
+            "profile": self.library[i],
             "cover_width": num(self.WidthBox, "Cover width", 50),
             "max_length": num(self.LengthBox, "Max length", 200),
             "joint": num(self.JointBox, "Joint", 0),
@@ -143,18 +149,6 @@ class CladdingWindow(forms.WPFWindow):
             self.StatusText.Text = str(ex)
             return
         self.Close()
-
-
-class _Item(object):
-    def __init__(self, profile):
-        self.profile = profile
-        self.name = profile.get("name", "Unnamed")
-
-    # WPF shows items by their string form
-    def __str__(self):
-        return self.name
-
-    __repr__ = __str__
 
 
 # ---------------------------------------------------------------------------

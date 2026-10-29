@@ -23,6 +23,8 @@ from Autodesk.Revit.DB.ExtensibleStorage import (
 from cladding import profiles, layout
 
 MM = 1.0 / 304.8
+MIN_MODEL_T = 1.5   # mm, thinnest sheet Revit can model reliably
+MIN_EDGE = 1.2      # mm, Revit's short-curve tolerance is ~0.8 mm
 APP_ID = "CladdingTools"
 SCHEMA_GUID = Guid("6b0f3c1e-8a52-4d6f-9c1b-2e7a5d4f9a31")
 
@@ -87,8 +89,11 @@ def panel_solid(frame, panel, recipe, material_id):
     r = layout.merged(recipe)
     prof = r["profile"]
     pts = profiles.tile(profiles.profile_points(prof), panel["width"])
-    t = float(prof.get("thickness", 0.7))
-    loop2d = profiles.section_loop(pts, t)
+    # Revit can't make edges shorter than ~0.8 mm, so thin sheets are
+    # modelled at MIN_MODEL_T. Quantities still use the real thickness.
+    t = max(float(prof.get("thickness", 0.7)), MIN_MODEL_T)
+    pts = _drop_short(pts, MIN_EDGE)
+    loop2d = _drop_short(profiles.section_loop(pts, t), MIN_EDGE, closed=True)
     lift = float(r["standoff"]) + t   # back of the sheet sits on the standoff
 
     if r["orientation"] == "horizontal":
@@ -103,16 +108,29 @@ def panel_solid(frame, panel, recipe, material_id):
 
     loop = CurveLoop()
     pts3 = [p3(x, z) for x, z in loop2d]
-    tol = 0.5 * MM
     for a, b in zip(pts3, pts3[1:] + pts3[:1]):
-        if a.DistanceTo(b) > tol:
-            loop.Append(Line.CreateBound(a, b))
+        loop.Append(Line.CreateBound(a, b))
 
     opts = SolidOptions(material_id, ElementId.InvalidElementId)
     loops = List[CurveLoop]()
     loops.Add(loop)
     return GeometryCreationUtilities.CreateExtrusionGeometry(
         loops, direction, panel["length"] * MM, opts)
+
+
+def _drop_short(pts, min_len, closed=False):
+    """Remove points that would create edges shorter than min_len (mm)."""
+    out = [pts[0]]
+    for p in pts[1:]:
+        if ((p[0] - out[-1][0]) ** 2 + (p[1] - out[-1][1]) ** 2) ** 0.5 >= min_len:
+            out.append(p)
+    if not closed and out[-1] != pts[-1]:
+        out[-1] = pts[-1]          # keep the true panel edge
+    if closed:
+        while len(out) > 3 and ((out[0][0] - out[-1][0]) ** 2 +
+                                (out[0][1] - out[-1][1]) ** 2) ** 0.5 < min_len:
+            out.pop()
+    return out
 
 
 # --------------------------------------------------------------------------
