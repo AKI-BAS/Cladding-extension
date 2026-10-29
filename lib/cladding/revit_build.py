@@ -4,7 +4,6 @@ DirectShapes, parameters and the stored recipe.
 
 Revit works in feet internally; this module converts from mm at the edges.
 """
-import json
 import uuid
 
 import clr
@@ -155,7 +154,7 @@ def build(doc, faces, recipe, group_id=None):
     mat = find_material(doc, r["material"])
     created, skipped, all_panels = 0, 0, []
     refs = [ref.ConvertToStableRepresentation(doc) for ref, _ in faces]
-    payload = json.dumps({"group": group_id, "faces": refs, "recipe": r})
+    payload = profiles.dumps({"group": group_id, "faces": refs, "recipe": r})
 
     for ref, face in faces:
         frame = FaceFrame(face)
@@ -261,4 +260,4 @@ def read_stored(el):
     e = el.GetEntity(s)
     if not e.IsValid():
         return None
-    return json.loads(e.Get[String](s.GetField("Data")))
+    return profiles.loads(e.Get[String](s.GetField("Data")))

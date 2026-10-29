@@ -12,11 +12,72 @@ Profile files (library/profiles/*.json) describe it either as
   "pattern": a list of segments (flat, zig, sine, trapezoid, seam), or
   "points":  a raw list of [x, z] pairs (what Save Profile writes).
 """
+import io
 import json
 import math
 import os
 
 SEGMENT_TYPES = ("flat", "zig", "sine", "trapezoid", "seam")
+
+
+# --------------------------------------------------------------------------
+# JSON that survives non-ASCII text in IronPython
+# --------------------------------------------------------------------------
+# IronPython 2.7's json encoder crashes on characters like á, æ, ð, þ
+# (e.g. a material called "Stál"). Swap them for ASCII tokens before
+# encoding, then turn the tokens into standard \uXXXX escapes.
+_TOKEN = "@@CT{:04x}@@"
+
+
+def _protect(obj):
+    if isinstance(obj, dict):
+        return dict((_protect(k), _protect(v)) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return [_protect(v) for v in obj]
+    if isinstance(obj, basestring_types):
+        return u"".join(c if ord(c) < 128 else _TOKEN.format(ord(c)) for c in _text(obj))
+    return obj
+
+
+def _text(s):
+    if isinstance(s, bytes) and not isinstance(s, str):  # CPython 3 bytes
+        return s.decode("utf-8")
+    try:
+        return unicode(s)  # noqa: F821  (IronPython / Py2)
+    except NameError:
+        return s
+    except UnicodeDecodeError:
+        return s.decode("utf-8")
+
+
+try:
+    basestring_types = (basestring,)  # noqa: F821
+except NameError:
+    basestring_types = (str,)
+
+
+def dumps(obj, **kw):
+    text = json.dumps(_protect(obj), **kw)
+    i = text.find("@@CT")
+    while i >= 0:
+        code = text[i + 4:i + 8]
+        text = text[:i] + "\\u" + code + text[i + 10:]
+        i = text.find("@@CT", i)
+    return str(text)
+
+
+def loads(text):
+    return json.loads(text)
+
+
+def read_json(path):
+    with io.open(path, "r", encoding="utf-8") as f:
+        return json.loads(f.read())
+
+
+def write_json(path, obj):
+    with io.open(path, "w", encoding="utf-8") as f:
+        f.write(u"" + dumps(obj, indent=2))
 
 
 # --------------------------------------------------------------------------
@@ -37,8 +98,7 @@ def load_library(folder=None):
             continue
         path = os.path.join(folder, name)
         try:
-            with open(path, "r") as f:
-                data = json.load(f)
+            data = read_json(path)
             data["_file"] = path
             profile_points(data)  # validate early
             profiles.append(data)
@@ -51,11 +111,11 @@ def save_profile(profile, folder=None):
     folder = folder or library_dir()
     if not os.path.isdir(folder):
         os.makedirs(folder)
-    slug = "".join(c if c.isalnum() else "-" for c in profile["name"].lower()).strip("-")
+    slug = "".join(c if (c.isalnum() and ord(c) < 128) else "-"
+                   for c in profile["name"].lower()).strip("-") or "profile"
     path = os.path.join(folder, slug + ".json")
     clean = dict((k, v) for k, v in profile.items() if not k.startswith("_"))
-    with open(path, "w") as f:
-        json.dump(clean, f, indent=2)
+    write_json(path, clean)
     return path
 
 
