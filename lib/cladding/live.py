@@ -2,9 +2,9 @@
 """Live update: change a CT_ input in Properties and the cladding rebuilds.
 
 A Revit Dynamic Model Updater watches CladdingTools panels. When a CT_
-input (profile, cover width, max length, joint, standoff, orientation,
-material) differs from the stored recipe, or CT_PanelWidth / CT_PanelLength
-is typed over, the whole group is rebuilt inside
+value on a panel differs from what the cladding says it should be, the edit
+is recorded (per panel, or for the whole cladding) and the cladding is
+updated in place (tags stay) inside
 the same transaction, so one Ctrl+Z undoes the edit and the rebuild together.
 
 Registered from the extension's startup.py. Invalid values are put back to
@@ -19,7 +19,7 @@ from Autodesk.Revit.DB import (
     FailureSeverity, FailureMessage, ElementId,
 )
 
-from cladding import profiles, inputs, revit_build, revit_params
+from cladding import profiles, inputs, groupdata, revit_build, revit_params
 
 UPDATER_GUID = Guid("0d4b7d36-5c8e-4f0b-a7a3-8f1e2c6b9d42")
 BAD_VALUE_ID = FailureDefinitionId(Guid("5e0a2c6f-1b7d-4c3e-9a8f-6d2b4e1c7a90"))
@@ -34,7 +34,7 @@ def _define_failures():
                        "orientation not Vertical/Horizontal, or a size too small). "
                        "It was put back to the previous value."),
         (NO_MATERIAL_ID, "CladdingTools: no material in this project matches CT_Material. "
-                         "The cladding was rebuilt without a material."),
+                         "Those panels were built without a material."),
         (NO_HOST_ID, "CladdingTools: the wall/roof face this cladding was applied to "
                      "no longer exists, so it can't be rebuilt. Apply the cladding again."),
     ):
@@ -71,62 +71,75 @@ class CladdingUpdater(IUpdater):
 
     def Execute(self, data):
         try:
-            self._run(data)
+            run(data.GetDocument(), data.GetModifiedElementIds())
         except Exception as ex:
             # Never let an exception escape: Revit would disable the updater.
             print(u"CladdingTools live update failed: {}".format(ex))
 
-    def _run(self, data):
-        doc = data.GetDocument()
-        done = set()
-        library = None
-        for eid in data.GetModifiedElementIds():
-            el = doc.GetElement(eid)
-            if not isinstance(el, DirectShape) or el.ApplicationId != revit_build.APP_ID:
-                continue
-            group = el.ApplicationDataId
-            if group in done:
-                continue
-            stored = revit_build.read_stored(el)
-            if not stored:
-                continue
-            values, outputs_edited = inputs.requested_values(
-                revit_params.get_inputs(el), revit_params.get_outputs(el), stored)
-            if library is None:
-                library = profiles.load_library()
-            try:
-                recipe, changes = inputs.apply_inputs(stored["recipe"], values, library)
-            except ValueError:
-                revit_params.set_values(el, inputs.recipe_inputs(stored["recipe"]))
-                _warn(doc, BAD_VALUE_ID, eid)
-                done.add(group)
-                continue
-            if not changes:
-                if outputs_edited:  # area/weight/group typed over: put them back
-                    revit_params.set_values(el, inputs.stored_outputs(stored))
-                continue            # moved, or our own writes: nothing to do
-            done.add(group)
 
-            try:
-                faces = revit_build.resolve_faces(doc, stored["faces"])
-            except Exception:
-                revit_params.set_values(el, inputs.recipe_inputs(stored["recipe"]))
-                _warn(doc, NO_HOST_ID, eid)
+def run(doc, element_ids):
+    """Find CT_ edits on the given panels and rebuild the claddings they belong to."""
+    by_group = {}
+    for eid in element_ids:
+        el = doc.GetElement(eid)
+        if isinstance(el, DirectShape) and el.ApplicationId == revit_build.APP_ID:
+            by_group.setdefault(el.ApplicationDataId, []).append(el)
+
+    library = None
+    for gid, els in by_group.items():
+        group = revit_build.load_group(doc, gid)
+        if group is None:
+            continue                 # made with an older version: Regenerate first
+        edits, expected = {}, {}
+        for el in els:
+            pd = revit_build.read_panel(el)
+            if not pd or "key" not in pd:
                 continue
+            exp = groupdata.expected_for(group, pd)
+            expected[el.Id] = exp
+            e, outputs_edited = groupdata.find_edits(revit_params.get_values(el), exp)
+            if not e:   # picked another type in the Type Selector?
+                t = revit_build.read_type(doc, el)
+                if t and groupdata.type_name(t.get("profile"), t.get("material")) != \
+                        groupdata.type_name(exp["CT_Profile"], exp["CT_Material"]):
+                    e = groupdata.type_edits(t, exp)
+            if e:
+                edits[pd["key"]] = e
+            elif outputs_edited:     # area/weight/id typed over: put them back
+                revit_params.set_values(el, dict((n, exp[n]) for n in inputs.OUTPUT_NAMES))
+        if not edits:
+            continue                 # moved, or our own writes: nothing to do
 
-            if recipe.get("material") and \
-                    revit_build.find_material(doc, recipe["material"]) == ElementId.InvalidElementId:
-                recipe["material"] = ""
-                warn_material = True
-            else:
-                warn_material = False
+        def put_back():
+            for el in els:
+                if el.Id in expected:
+                    exp = expected[el.Id]
+                    revit_params.set_values(el, exp)
+                    t = revit_build.panel_type(doc, exp["CT_Profile"], exp["CT_Material"])
+                    if el.GetTypeId() != t.Id:
+                        el.SetTypeId(t.Id)
 
-            revit_build.delete_group(doc, group)
-            revit_build.build(doc, faces, recipe, group)
-            if warn_material:
-                panels = revit_build.group_panels(doc, group)
-                if panels:
-                    _warn(doc, NO_MATERIAL_ID, panels[0].Id)
+        if library is None:
+            library = profiles.load_library()
+        try:
+            count = len(revit_build.group_panels(doc, gid))
+            new_group, _ = groupdata.apply_edits(group, edits, count, library)
+        except ValueError:
+            put_back()
+            _warn(doc, BAD_VALUE_ID, els[0].Id)
+            continue
+        try:
+            faces = revit_build.resolve_faces(doc, group["faces"])
+        except Exception:
+            put_back()
+            _warn(doc, NO_HOST_ID, els[0].Id)
+            continue
+
+        summary = revit_build.build(doc, faces, new_group, ensure_params=False)
+        if summary["missing_materials"]:
+            panels = revit_build.group_panels(doc, gid)
+            if panels:
+                _warn(doc, NO_MATERIAL_ID, panels[0].Id)
 
 
 def register(addin_id):

@@ -23,56 +23,89 @@ Reload pyRevit. A **CladdingTools** tab appears.
 
 ## Buttons
 - **Apply Cladding**: pick flat faces > choose profile and panel settings >
-  live preview and quantities > Apply. Panels are Generic Models (DirectShapes).
-- **Regenerate**: rebuilds the selected cladding, e.g. after the wall moved.
-  Shift+Click to pick a new profile from a list. Usually not needed for
-  parameter edits, see Live update.
+  live preview > Apply. Panels are cut around doors, windows and sloped edges.
+- **Add Flashings**: select doors/windows (or pick them after clicking), choose
+  a flashing type and material. Adds a head, both jambs, and a sill on windows
+  that aren't at floor level; doors never get a sill. Also "no sills" and
+  "Remove flashings". See Flashings below.
+- **Select Cladding**: select one panel, click, and every panel of that
+  cladding is selected.
+- **Regenerate**: rebuilds the selected cladding to follow its wall/roof,
+  keeping all panel edits. Shift+Click: reset all panel edits, or change the
+  profile of the whole cladding.
 - **Save Profile**: draw ONE module of a profile with detail lines in a drafting
   view (left to right, connected), select them, click. It is saved to
   `library/profiles/` and shows up in Apply Cladding.
 
-## Live update
-Change a CT_ value on any panel in Properties and click Apply: the whole
-cladding rebuilds straight away, in the same undo step.
+## Editing panels
+Edits update live: change a value in Properties, click Apply, and the
+cladding rebuilds in the same undo step.
 
-- **CT_PanelWidth**: type a width and the panels become that wide, snapped to
-  whole profile modules (1200 mm of 76 mm corrugation becomes 1216 mm).
-- **CT_PanelLength**: type a length and runs are split at that length or less.
-- The other inputs (profile, joint, standoff, orientation, material) work the same.
-- Calculated values (areas, weight, group) snap back if typed over.
-- A value that can't be used (unknown profile, size too small) is put back and
-  Revit shows a warning.
+**One panel** (Properties > Dimensions)
 
-Live update is switched on by `startup.py` when pyRevit loads. Cladding made
-with an older version needs one Regenerate before width/length edits work.
-
-## Parameters
-The first time you apply cladding in a project, the tool creates these shared
-parameters on Generic Models (fixed GUIDs, so schedules and view filters carry
-over between projects). Your own shared parameter file setting is left alone.
-
-**Inputs** (edit in Properties; rebuilds live)
-
-| Parameter | Type | Notes |
-|---|---|---|
-| CT_Profile | Text | Any profile name from the library |
-| CT_CoverWidth | Length | Snaps to whole profile modules |
-| CT_MaxLength | Length | Longer runs are split |
-| CT_Joint | Length | Gap between panels |
-| CT_Standoff | Length | Host face to back of sheet |
-| CT_Orientation | Text | Vertical / Horizontal (Lóðrétt / Lárétt also work) |
-| CT_Material | Text | Material name in the project, blank for none |
-
-**Calculated** (for schedules; CT_PanelWidth and CT_PanelLength can also be typed over to resize)
-
-| Parameter | Type |
+| Parameter | What it does |
 |---|---|
-| CT_Group | Text |
-| CT_PanelLength | Length |
-| CT_PanelWidth | Length |
-| CT_CoverArea | Area |
-| CT_DevelopedArea | Area (unfolded sheet) |
-| CT_Weight | Number (kg) |
+| CT_PanelWidth | Width of that panel's strip, snapped to whole profile modules. Later strips shift along. |
+| CT_PanelLength | Length of that panel. Later panels in the strip re-split the rest. |
+| CT_Profile | Profile of that panel (any library profile name) |
+| CT_Material | Material of that panel, blank for none. Case and accents are ignored. |
+
+**Types.** Panels get a type per profile and material, e.g.
+`Cladding - Corrugated 18/76 - Stál`. Picking another type in the Type
+Selector changes the panel's profile and material, like swapping a family
+type. Right-click > Select All Instances selects every panel with that profile
+and material.
+
+**Tags stay.** Edits update the existing panels in place, so element ids and
+tags survive. Only panels that disappear (e.g. now fully inside an opening)
+are removed.
+| CT_Standoff | Distance from the wall to the back of that panel |
+
+Select several panels and set a value to change all of them. If you set the
+same profile, material, standoff or width on **every** panel, it becomes the
+cladding's default instead of separate edits.
+
+**Whole cladding** (Properties > Data, edit on any panel)
+
+| Parameter | What it does |
+|---|---|
+| CT_CoverWidth | Standard panel width (strips you resized keep their width) |
+| CT_MaxLength | Longest panel before a run is split |
+| CT_Joint | Gap between panels |
+| CT_Orientation | Vertical / Horizontal (Lóðrétt / Lárétt also work). Resets panel edits. |
+
+**Calculated** (for schedules; snap back if typed over): CT_Group, CT_PanelId
+(face, strip, piece), CT_CoverArea, CT_DevelopedArea, CT_Weight. Areas and
+weight are reduced in proportion to what was cut away for openings.
+
+A value that can't be used (unknown profile, size too small) is put back and
+Revit shows a warning. The parameters are created on Generic Models the first
+time you apply cladding in a project, with fixed GUIDs so schedules and filters
+carry over between projects.
+
+Cladding made with an older version: select a panel and click Regenerate once.
+
+## Flashings
+- Each side (head, left jamb, right jamb, sill) is its own Generic Model:
+  select one and press Delete to remove just that side.
+- The head runs the full width plus both laps and sits over the jambs; the sill
+  runs under them, the way trims lap on site.
+- The flashing sits on the outside of the CladdingTools cladding on that wall
+  (50 mm from the wall if there is none). "Same as the cladding" uses the
+  cladding's material.
+- Running Add Flashings again on a door/window replaces its flashings, e.g.
+  after the cladding or the opening changed. Flashings don't update live.
+- Types are named `Flashing - <type> - <material>`. Parameters: CT_Profile
+  (type), CT_Material, CT_PanelLength (run length), CT_DevelopedArea, CT_Weight,
+  CT_PanelId (e.g. "Window 345678 head"), CT_Group = "Flashing".
+
+Flashing types live in `library/flashings/*.json`:
+
+```json
+{"name": "Box trim 100", "face_width": 100, "kick": 15, "return": true, "thickness": 0.7}
+```
+`face_width` = lap over the cladding, `kick` = turn-down at its outer edge,
+`return` = leg from the cladding back to the wall inside the opening.
 
 ## Profile files
 Either a `pattern` of segments or raw `points` (mm, x across, z depth):
@@ -86,12 +119,8 @@ Either a `pattern` of segments or raw `points` (mm, x across, z depth):
 Segment types: `flat`, `zig`, `sine`, `trapezoid` (`top`, `bottom`), `seam` (`seam`).
 Optional `density` in kg/m3 (default steel 7850).
 
-## Known limits (v1)
+## Known limits
 - Flat faces only. Curved faces are skipped.
-- Panels are laid out on the face's bounding rectangle; panels whose centre sits
-  in an opening or outside the face are skipped, but edge panels are not trimmed
-  to sloped edges or around openings.
 - No end laps, flashings or corner trims.
-- Panels are DirectShapes: no grips or Edit Type. Change them through the CT_
-  parameters and Regenerate.
+- Panels are DirectShapes: no grips. Change them through the CT_ parameters.
 - Written for Revit 2024 and later on pyRevit's IronPython engine.

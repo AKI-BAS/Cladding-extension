@@ -14,7 +14,7 @@ import System.Windows.Media as Media
 import System.Windows.Shapes as Shapes
 from System.Windows import Point
 
-from cladding import profiles, layout, preview, revit_build
+from cladding import profiles, layout, preview, revit_build, groupdata
 
 doc = revit.doc
 uidoc = revit.uidoc
@@ -164,12 +164,19 @@ win = CladdingWindow(faces, library)
 win.ShowDialog()
 
 if win.result:
+    group = groupdata.new_group(revit_build.new_group_id(), win.result)
     with revit.Transaction("Apply cladding"):
-        group, made, skipped, totals = revit_build.build(doc, faces, win.result)
+        summary = revit_build.build(doc, faces, group)
+    t = summary["totals"]
     out = script.get_output()
-    out.print_md("### Cladding `{}` created".format(group))
-    out.print_md("- {} panels, {} skipped (openings or failed geometry)".format(made, skipped))
-    out.print_md("- Cover area {:.1f} m², sheet area {:.1f} m², weight {:.0f} kg".format(
-        totals["cover_area_m2"], totals["developed_area_m2"], totals["weight_kg"]))
-    out.print_md("- To change it: edit the **CT_** parameters on any panel in Properties, "
-                 "then click **Regenerate**.")
+    out.print_md(u"### Cladding `{}` created".format(group["group"]))
+    out.print_md(u"- {} panels, {} cut around openings or edges, {} fully inside openings"
+                 .format(summary["created"], summary["trimmed"], summary["skipped"]))
+    out.print_md(u"- Cover area {:.1f} m², sheet area {:.1f} m², weight {:.0f} kg".format(
+        t["cover_area_m2"], t["developed_area_m2"], t["weight_kg"]))
+    if summary["missing_materials"]:
+        out.print_md(u"- No material called {} in this project, built without it".format(
+            u", ".join(summary["missing_materials"])))
+    out.print_md(u"- Change one panel: edit its values under **Dimensions** in Properties. "
+                 u"Change the whole cladding: Select All Instances, or edit CT_CoverWidth, "
+                 u"CT_MaxLength, CT_Joint or CT_Orientation on any panel.")

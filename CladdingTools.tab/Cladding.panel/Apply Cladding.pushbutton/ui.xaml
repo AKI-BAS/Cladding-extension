@@ -107,7 +107,7 @@
                 </ComboBox>
                 <TextBlock Style="{StaticResource Label}" Text="Material"/>
                 <ComboBox x:Name="MaterialBox"/>
-                <TextBlock Style="{StaticResource Label}" Text="Quantities (picked faces)"/>
+                <TextBlock Style="{StaticResource Label}" Text="Quantities (estimate, picked faces)"/>
                 <TextBlock x:Name="QtyText" FontFamily="Consolas" LineHeight="18"/>
             </StackPanel>
             <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom">

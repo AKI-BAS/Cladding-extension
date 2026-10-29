@@ -33,20 +33,29 @@ def _spec(kind):
     }[kind]
 
 
-def _bound_names(doc):
-    names = set()
+def _bindings(doc):
+    """{name: InternalDefinition} for every parameter bound in the project."""
+    out = {}
     it = doc.ParameterBindings.ForwardIterator()
     while it.MoveNext():
-        names.add(it.Key.Name)
-    return names
+        out[it.Key.Name] = it.Key
+    return out
+
+
+def _group_for(name):
+    """Per-panel values go under Dimensions, everything else under Data."""
+    from Autodesk.Revit.DB import GroupTypeId
+    return GroupTypeId.Geometry if name in inputs.PANEL_NAMES else GroupTypeId.Data
 
 
 def ensure_parameters(doc):
-    """Create and bind any missing CT_ parameters. Call inside a transaction.
+    """Create and bind any missing CT_ parameters, and put each one in the
+    right Properties group. Call inside a transaction.
 
     Returns the names that were added.
     """
-    have = _bound_names(doc)
+    have = _bindings(doc)
+    _regroup(have)
     missing = [d for d in inputs.ALL if d[0] not in have]
     if not missing:
         return []
@@ -76,7 +85,7 @@ def ensure_parameters(doc):
                 opts.GUID = Guid(guid)
                 opts.Description = desc
                 definition = group.Definitions.Create(opts)
-            if _insert(doc, definition, binding):
+            if _insert(doc, definition, binding, name):
                 added.append(name)
     finally:
         try:
@@ -86,26 +95,34 @@ def ensure_parameters(doc):
     return added
 
 
-def _insert(doc, definition, binding):
+def _regroup(bound):
+    """Move CT_ parameters made by an earlier version to the right group."""
+    for name in inputs.KINDS:
+        definition = bound.get(name)
+        if definition is None:
+            continue
+        try:
+            target = _group_for(name)
+            if definition.GetGroupTypeId() != target:
+                definition.SetGroupTypeId(target)
+        except Exception:
+            pass   # older Revit without ForgeTypeId groups: leave as is
+
+
+def _insert(doc, definition, binding, name):
     try:
-        from Autodesk.Revit.DB import GroupTypeId
-        return doc.ParameterBindings.Insert(definition, binding, GroupTypeId.Data)
+        return doc.ParameterBindings.Insert(definition, binding, _group_for(name))
     except Exception:
         return doc.ParameterBindings.Insert(definition, binding)
 
 
-def _kinds():
-    return dict((d[0], d[1]) for d in inputs.ALL)
-
-
 def set_values(el, values):
     """values: {name: mm / m2 / number / text}. Silently skips missing params."""
-    kinds = _kinds()
     for name, v in values.items():
         p = el.LookupParameter(name)
         if p is None or p.IsReadOnly or v is None:
             continue
-        kind = kinds.get(name, "text")
+        kind = inputs.KINDS.get(name, "text")
         try:
             if p.StorageType == StorageType.String:
                 p.Set(u"{}".format(v))
@@ -119,28 +136,10 @@ def set_values(el, values):
             print(u"Couldn't set {}: {}".format(name, ex))
 
 
-def get_inputs(el):
-    """Current CT_ input values on an element (mm / text). None when unset."""
-    kinds = _kinds()
+def get_values(el):
+    """Every CT_ value on an element (mm / m2 / number / text). None when unset."""
     out = {}
-    for name, kind, _, _ in inputs.INPUTS:
-        p = el.LookupParameter(name)
-        if p is None or not p.HasValue:
-            out[name] = None
-            continue
-        if p.StorageType == StorageType.String:
-            out[name] = p.AsString()
-        elif kind == "length":
-            out[name] = p.AsDouble() / MM
-        else:
-            out[name] = p.AsDouble()
-    return out
-
-
-def get_outputs(el):
-    """Current calculated CT_ values (mm / m2 / number / text). None when unset."""
-    out = {}
-    for name, kind, _, _ in inputs.OUTPUTS:
+    for name, kind, _, _ in inputs.ALL:
         p = el.LookupParameter(name)
         if p is None or not p.HasValue:
             out[name] = None
@@ -153,4 +152,3 @@ def get_outputs(el):
         else:
             out[name] = p.AsDouble()
     return out
-
