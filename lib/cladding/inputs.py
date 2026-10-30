@@ -54,7 +54,16 @@ OUTPUTS = [
 ]
 
 INPUTS = PANEL + GROUP
-ALL = INPUTS + OUTPUTS
+# --- labels: written by the tool (marks), never treated as edits ------------
+LABELS = [
+    ("CT_PanelType", "text", "b2897035-9154-43ca-a3a8-fe1df7813871",
+     "Panel mark: identical panels (profile, material, thickness, perforation, "
+     "width, length) share one mark across the project (calculated)."),
+    ("CT_Cut", "text", "3bd2ecad-d40f-4c0c-90d9-1dc0261a92d4",
+     "'Cut' when the panel is cut around an opening or an edge (calculated)."),
+]
+
+ALL = INPUTS + OUTPUTS + LABELS
 KINDS = dict((d[0], d[1]) for d in ALL)
 PANEL_NAMES = [d[0] for d in PANEL]
 GROUP_NAMES = [d[0] for d in GROUP]

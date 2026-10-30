@@ -14,9 +14,10 @@ from Autodesk.Revit.DB import (
 CLADDING = {
     "name": "CladdingTools - Cladding",
     "filter": ("CT_Group", ScheduleFilterType.NotEqual, "Flashing"),
+    "has_value": "CT_PanelType",          # leaves out other Generic Models
     # (parameter, heading, total?)
     "fields": [
-        ("CT_Group", "Cladding", False),
+        ("CT_PanelType", "Panel type", False),
         ("CT_Profile", "Profile", False),
         ("CT_Material", "Material", False),
         ("CT_Thickness", "Thickness", False),
@@ -24,19 +25,21 @@ CLADDING = {
         ("CT_OpenArea", "Open area %", False),
         ("CT_PanelWidth", "Width", False),
         ("CT_PanelLength", "Length", False),
+        ("CT_Cut", "Cut", False),
         ("#count", "Count", False),
         ("CT_CoverArea", "Area (flat, wall covered)", True),
         ("CT_DevelopedArea", "Area (sheet, unfolded)", True),
         ("CT_Weight", "Weight (kg)", True),
     ],
-    "itemized_extra": [("CT_PanelId", "Panel", False)],
-    "group_by": "CT_Group",
-    "sort": ["CT_Group", "CT_Profile", "CT_PanelWidth", "CT_PanelLength"],
+    "itemized_extra": [("CT_PanelId", "Position", False)],
+    "group_by": None,
+    "sort": ["CT_PanelType", "CT_Cut"],
 }
 
 FLASHINGS = {
     "name": "CladdingTools - Flashings",
     "filter": ("CT_Group", ScheduleFilterType.Equal, "Flashing"),
+    "has_value": None,
     "fields": [
         ("CT_Profile", "Flashing type", False),
         ("CT_Material", "Material", False),
@@ -79,6 +82,17 @@ def _totals(field):
             pass
 
 
+def _decimals(field, digits):
+    from Autodesk.Revit.DB import FormatOptions, UnitTypeId
+    try:
+        fo = FormatOptions(UnitTypeId.General)
+        fo.UseDefault = False
+        fo.Accuracy = 10 ** (-digits)
+        field.SetFormatOptions(fo)
+    except Exception:
+        pass
+
+
 def create(doc, spec, itemized=False):
     """Create the schedule (call inside a transaction). Returns (view, missing params)."""
     name = spec["name"] + (u" (every piece)" if itemized else u"")
@@ -116,6 +130,15 @@ def create(doc, spec, itemized=False):
         ffield.IsHidden = True
     if ffield is not None:
         d.AddFilter(ScheduleFilter(ffield.FieldId, ftype, fvalue))
+    hv = spec.get("has_value")
+    if hv and hv in added:
+        try:
+            d.AddFilter(ScheduleFilter(added[hv].FieldId, ScheduleFilterType.HasValue))
+        except Exception:
+            pass
+    for pname in ("CT_Weight", "CT_OpenArea"):
+        if pname in added:
+            _decimals(added[pname], 1)
 
     # Sorting / grouping (Revit allows at most 4 levels). Rows with identical
     # values in every column are combined anyway when not itemized, so 4 is

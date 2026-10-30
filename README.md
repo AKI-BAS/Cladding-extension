@@ -43,7 +43,8 @@ Reload pyRevit. A **CladdingTools** tab appears.
   and tells you whether they're on. Shift+Click: reset all panel edits, or
   change the profile of the whole cladding.
 - **Cladding Schedule** / **Flashing Schedule**: create (or open) a Revit
-  schedule of all cladding panels / flashings: profile or flashing type,
+  schedule of all cladding panels / flashings. The cladding schedule lists
+  panel types (P01, P02...: see Panel marks) with profile,
   material, thickness, width, length, count, flat area (wall covered), sheet
   area (unfolded, more than flat for corrugated) and weight, with totals.
   Identical pieces share a row; Shift+Click for one row per piece. They are
@@ -104,6 +105,15 @@ carry over between projects. A CT_ parameter that exists with the wrong type
 are moved to Dimensions; the output window lists what changed.
 
 Cladding made with an older version: select a panel and click Regenerate once.
+
+## Panel marks
+Every cladding panel gets a mark in **CT_PanelType** (P01, P02...). Panels
+that are physically the same (profile, material, thickness, perforation,
+width and length) share a mark across the whole project, copies included; a
+copy you resize gets a new mark. Marks are stored in the project, so P03 stays
+P03 when new sizes are added and tags keep pointing at the right type.
+**CT_Cut** says "Cut" for panels cut around an opening or edge; they share
+the mark of their full size but get their own row in the schedule.
 
 ## Perforated panels
 In the cladding window (Apply or Switch) pick **Perforation**: round holes,

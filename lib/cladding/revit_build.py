@@ -667,6 +667,63 @@ def read_type(doc, el):
 # --------------------------------------------------------------------------
 # Build / delete
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Panel marks (P01, P02...)
+# --------------------------------------------------------------------------
+MARK_PREFIX = "P"
+
+
+def _mark_key(v):
+    from cladding import perforation
+    return u"|".join([
+        profiles.fold(v.get("CT_Profile") or u""),
+        profiles.fold(perforation.base_material(v.get("CT_Material") or u"")),
+        u"{:.1f}".format(float(v.get("CT_Thickness") or 0)),
+        profiles.fold(v.get("CT_Perforation") or u"none"),
+        u"{:.0f}".format(float(v.get("CT_PanelWidth") or 0)),
+        u"{:.0f}".format(float(v.get("CT_PanelLength") or 0)),
+    ])
+
+
+def _marks_storage(doc):
+    for ds in FilteredElementCollector(doc).OfClass(DataStorage):
+        try:
+            data = _read(ds)
+        except Exception:
+            continue
+        if data and data.get("kind") == "marks":
+            return ds, data
+    return None, {"kind": "marks", "next": 1, "map": {}}
+
+
+def number_panels(doc):
+    """Give every cladding panel in the project (copies included) a mark.
+    Identical panels share a mark; marks are kept in the project so they
+    don't change when new sizes appear. Returns the number of marks in use."""
+    panels = [ds for ds in FilteredElementCollector(doc).OfClass(DirectShape)
+              if ds.ApplicationId == APP_ID]
+    if not panels:
+        return 0
+    store, data = _marks_storage(doc)
+    keys = {}
+    for ds in panels:
+        keys[ds.Id] = _mark_key(revit_params.get_values(ds))
+    new = sorted(set(k for k in keys.values() if k not in data["map"]))
+    for k in new:
+        data["map"][k] = u"{}{:02d}".format(MARK_PREFIX, data["next"])
+        data["next"] += 1
+    for ds in panels:
+        mark = data["map"][keys[ds.Id]]
+        p = ds.LookupParameter("CT_PanelType")
+        if p is not None and not p.IsReadOnly and p.AsString() != mark:
+            p.Set(mark)
+    if new or store is None:
+        if store is None:
+            store = DataStorage.Create(doc)
+        _store(store, profiles.dumps(data))
+    return len(set(keys.values()))
+
+
 def face_frames(doc, faces, group):
     """FaceFrames for a cladding's faces with corner joints applied.
     Returns (frames, number of corner adjustments)."""
@@ -852,7 +909,7 @@ def loose_expected(data):
         "CT_Thickness": float(r["profile"].get("thickness", 0.7)),
         "CT_CoverArea": q["cover_area_m2"],
         "CT_DevelopedArea": q["developed_area_m2"],
-        "CT_Weight": q["weight_kg"],
+        "CT_Weight": round(q["weight_kg"], 2),
     }
 
 
@@ -880,6 +937,8 @@ def rebuild_loose(doc, ds, data):
     data["uid"] = ds.UniqueId
     _store(ds, profiles.dumps(data))
     revit_params.set_values(ds, loose_expected(data))
+    revit_params.set_values(ds, {"CT_Cut": u""})
+    number_panels(doc)
 
 
 def build(doc, faces, group, ensure_params=True):
@@ -960,6 +1019,8 @@ def build(doc, faces, group, ensure_params=True):
 
             for q in ("CT_CoverArea", "CT_DevelopedArea", "CT_Weight"):
                 values[q] *= kept                # cut-outs reduce the quantities
+            values["CT_Weight"] = round(values["CT_Weight"], 2)
+            values["CT_Cut"] = u"Cut" if kept < 0.999 else u""
             revit_params.set_values(ds, values)
             _write_comment(ds, gid, values["CT_PanelId"], values["CT_Profile"], panel)
             _store(ds, profiles.dumps({
@@ -987,6 +1048,7 @@ def build(doc, faces, group, ensure_params=True):
     save_group(doc, group)
     summary["missing_materials"] = sorted(missing)
     summary["params"] = param_report
+    summary["marks"] = number_panels(doc)
     summary["corners"] = corners
     return summary
 

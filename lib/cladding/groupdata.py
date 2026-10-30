@@ -219,7 +219,7 @@ def expected_values(group, k, width, length):
         "CT_PanelId": panel_label(face, col, row),
         "CT_CoverArea": q["cover_area_m2"],
         "CT_DevelopedArea": q["developed_area_m2"],
-        "CT_Weight": q["weight_kg"],
+        "CT_Weight": round(q["weight_kg"], 2),
         "CT_Thickness": float(s["profile"].get("thickness", 0.7)),
     }
 
