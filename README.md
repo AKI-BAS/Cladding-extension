@@ -105,6 +105,20 @@ are moved to Dimensions; the output window lists what changed.
 
 Cladding made with an older version: select a panel and click Regenerate once.
 
+## Copying panels
+Copy a panel (Copy, Ctrl+C/V, Array...) and the copy becomes its own,
+independent panel: it stays where you put it, keeps the size, profile and
+material it had, and editing CT_ values on it (width, length, profile,
+material, standoff) changes only the copy. The original and the rest of the
+cladding are not touched and the copy is not deleted on Regenerate.
+Copies show "copy of F1 S3 P1" in CT_PanelId and "<cladding> (copies)" in
+CT_Group, so they get their own group in the schedule.
+- A copy no longer follows the cladding (Switch Cladding, wall changes).
+- A copy that was cut around a window is rebuilt as a full rectangle the
+  first time you edit it.
+- Moving an ordinary (non-copied) panel with Move doesn't stick: the next
+  rebuild puts it back in the layout. Copy it instead, or change its size.
+
 ## Corners
 Where two claddings meet at a corner (two walls, or two faces picked in one
 Apply), exactly one of them covers the corner:

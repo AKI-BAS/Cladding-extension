@@ -26,7 +26,10 @@ groups, flashings = {}, []
 for el in revit.get_selection():
     if not isinstance(el, DirectShape):
         continue
-    if el.ApplicationId == revit_build.APP_ID and el.ApplicationDataId not in groups:
+    if el.ApplicationId == revit_build.APP_ID and \
+            el.ApplicationDataId.endswith(revit_build.COPY_SUFFIX):
+        flashings.append(el)          # copied panels: edited on their own
+    elif el.ApplicationId == revit_build.APP_ID and el.ApplicationDataId not in groups:
         g, _ = revit_build.group_for_panel(doc, el)
         if g:
             groups[g["group"]] = g
@@ -98,6 +101,8 @@ for gid, summary, err in results:
                      u"Delete it and apply it again.".format(gid, err))
         continue
     t = summary["totals"]
+    if summary.get("copies"):
+        out.print_md(u"- {} copied panel(s) made independent".format(summary["copies"]))
     out.print_md(u"- Cladding `{}`: {} panels updated in place, {} new, {} removed, "
                  u"{} cut around openings. Sheet {:.1f} m², {:.0f} kg".format(
                      gid, summary["updated"], summary["created"], summary["removed"],

@@ -447,6 +447,182 @@ def read_type(doc, el):
 # --------------------------------------------------------------------------
 # Build / delete
 # --------------------------------------------------------------------------
+def face_frames(doc, faces, group):
+    """FaceFrames for a cladding's faces with corner joints applied.
+    Returns (frames, number of corner adjustments)."""
+    frames, clad, corners = [], None, 0
+    for fi, (ref, face) in enumerate(faces):
+        frame = FaceFrame(face)
+        if group["recipe"].get("corners", True):
+            if clad is None:
+                clad = _clad_faces(doc, group)
+            for side, mm in corner_extensions(frame, group["faces"][fi],
+                                              None, clad).items():
+                frame.extend(side, mm)
+                corners += 1
+        frames.append(frame)
+    return frames, corners
+
+
+# --------------------------------------------------------------------------
+# Copied panels ("loose" panels)
+# --------------------------------------------------------------------------
+# A panel copied with Copy/Ctrl+C keeps the original's stored data. Such
+# copies are detached from the cladding: they stay where they were put, get
+# their own data, and can be edited on their own (they no longer follow the
+# cladding's layout, and edits on them don't touch the original).
+COPY_SUFFIX = ":copy"
+
+
+def _xyz(p):
+    return [p.X, p.Y, p.Z]
+
+
+def _pt(a):
+    return XYZ(a[0], a[1], a[2])
+
+
+def centroid(el):
+    """Centroid of an element's solid geometry, or None."""
+    from Autodesk.Revit.DB import Options, Solid, GeometryInstance
+    pts, vols = [], 0.0
+    geo = el.get_Geometry(Options())
+    if geo is None:
+        return None
+    for g in geo:
+        solids = [g] if isinstance(g, Solid) else (
+            list(g.GetInstanceGeometry()) if isinstance(g, GeometryInstance) else [])
+        for so in solids:
+            if isinstance(so, Solid) and so.Volume > 1e-9:
+                c = so.ComputeCentroid()
+                pts.append((c, so.Volume))
+                vols += so.Volume
+    if not pts or vols <= 0:
+        return None
+    return XYZ(sum(c.X * v for c, v in pts) / vols, sum(c.Y * v for c, v in pts) / vols,
+               sum(c.Z * v for c, v in pts) / vols)
+
+
+class StoredFrame(object):
+    """The bits of a FaceFrame a loose panel needs, rebuilt from stored data."""
+
+    def __init__(self, d):
+        self.origin, self.right = _pt(d["o"]), _pt(d["r"])
+        self.up, self.normal = _pt(d["u"]), _pt(d["n"])
+
+    def point(self, u_mm, v_mm, n_mm=0.0):
+        return (self.origin + self.right.Multiply(u_mm * MM)
+                + self.up.Multiply(v_mm * MM) + self.normal.Multiply(n_mm * MM))
+
+
+def _int_id(el):
+    try:
+        return int(el.Id.ToString())
+    except Exception:
+        return 0
+
+
+def detach_copies(doc, group, faces=None):
+    """Find copies among a cladding's panels and turn them into loose panels.
+    Returns how many were detached."""
+    gid = group["group"]
+    by_key = {}
+    for ds in group_panels(doc, gid):
+        try:
+            pd = _read(ds)
+        except Exception:
+            pd = None
+        if pd and pd.get("key"):
+            by_key.setdefault(pd["key"], []).append((ds, pd))
+    copies = []
+    for k, items in by_key.items():
+        own = [x for x in items if x[1].get("uid") == x[0].UniqueId]
+        original = own[0] if own else sorted(items, key=lambda x: _int_id(x[0]))[0]
+        for x in items:
+            if x[0].Id != original[0].Id:
+                copies.append((x[0], x[1], original[0]))
+    if not copies:
+        return 0
+
+    placed = {}
+    try:
+        faces = faces or resolve_faces(doc, group["faces"])
+        frames, _ = face_frames(doc, faces, group)
+        for fi, frame in enumerate(frames):
+            lay = group["layouts"][fi] if fi < len(group["layouts"]) else None
+            panels, _ = groupdata.place(frame.extents, lay, group["recipe"])
+            for p in panels:
+                placed[groupdata.key(fi, p["col"], p["row"])] = (frame, p)
+    except Exception:
+        pass
+
+    for ds, pd, original in copies:
+        k = pd["key"]
+        recipe = groupdata.panel_recipe(group, k)
+        recipe = dict((a, b) for a, b in recipe.items() if a in (
+            "profile", "material", "standoff", "orientation"))
+        data = {"kind": "loose", "version": groupdata.VERSION, "group": gid,
+                "from_key": k, "uid": ds.UniqueId, "recipe": recipe}
+        c_copy, c_orig = centroid(ds), centroid(original)
+        if k in placed and c_copy is not None and c_orig is not None:
+            frame, p = placed[k]
+            data["frame"] = {"o": _xyz(frame.origin), "r": _xyz(frame.right),
+                             "u": _xyz(frame.up), "n": _xyz(frame.normal)}
+            data["panel"] = {"u0": p["u0"], "v0": p["v0"],
+                             "width": round(pd.get("width", p["width"]), 2),
+                             "length": round(pd.get("length", p["length"]), 2)}
+            data["shift"] = _xyz(c_copy - c_orig)
+            data["c"] = _xyz(c_copy)
+        ds.ApplicationDataId = gid + COPY_SUFFIX
+        _store(ds, profiles.dumps(data))
+        revit_params.set_values(ds, {"CT_Group": gid + u" (copies)",
+                                     "CT_PanelId": u"copy of " + groupdata.panel_label(
+                                         *[int(x) for x in k.split(":")])})
+    return len(copies)
+
+
+def loose_expected(data):
+    p = data.get("panel") or {}
+    r = data["recipe"]
+    q = profiles.panel_quantities(r["profile"], p.get("width", 0) or 1, p.get("length", 0) or 1)
+    return {
+        "CT_PanelWidth": float(p.get("width", 0)),
+        "CT_PanelLength": float(p.get("length", 0)),
+        "CT_Profile": r["profile"].get("name", "Custom"),
+        "CT_Material": r.get("material") or u"",
+        "CT_Standoff": float(r.get("standoff", 30)),
+        "CT_Thickness": float(r["profile"].get("thickness", 0.7)),
+        "CT_CoverArea": q["cover_area_m2"],
+        "CT_DevelopedArea": q["developed_area_m2"],
+        "CT_Weight": q["weight_kg"],
+    }
+
+
+def rebuild_loose(doc, ds, data):
+    """Rebuild a loose panel's geometry where it currently is."""
+    from Autodesk.Revit.DB import SolidUtils
+    frame = StoredFrame(data["frame"])
+    r = data["recipe"]
+    mat = find_material(doc, r.get("material"))
+    solid = panel_solid(frame, data["panel"], r, mat)
+    shift = _pt(data.get("shift", [0, 0, 0]))
+    now = centroid(ds)
+    if now is not None and data.get("c"):
+        shift = shift + (now - _pt(data["c"]))       # moved since last build
+    solid = SolidUtils.CreateTransformed(solid, Transform.CreateTranslation(shift))
+    shapes = List[GeometryObject]()
+    shapes.Add(solid)
+    ds.SetShape(shapes)
+    t = panel_type(doc, r["profile"].get("name", "Custom"), r.get("material") or u"")
+    if ds.GetTypeId() != t.Id:
+        ds.SetTypeId(t.Id)
+    data["shift"] = _xyz(shift)
+    data["c"] = _xyz(solid.ComputeCentroid())
+    data["uid"] = ds.UniqueId
+    _store(ds, profiles.dumps(data))
+    revit_params.set_values(ds, loose_expected(data))
+
+
 def build(doc, faces, group, ensure_params=True):
     """Build or update every panel of a cladding. Call inside a transaction.
 
@@ -463,6 +639,7 @@ def build(doc, faces, group, ensure_params=True):
     gid = group["group"]
     group["faces"] = [ref.ConvertToStableRepresentation(doc) for ref, _ in faces]
 
+    summary_copies = detach_copies(doc, group, faces)
     existing, stray = {}, []
     for ds in group_panels(doc, gid):
         try:
@@ -481,17 +658,9 @@ def build(doc, faces, group, ensure_params=True):
                           "total_length_m": 0.0, "count": 0}}
     layouts = []
 
-    clad = None
-    corners = 0
+    frames, corners = face_frames(doc, faces, group)
     for fi, (ref, face) in enumerate(faces):
-        frame = FaceFrame(face)
-        if group["recipe"].get("corners", True):
-            if clad is None:
-                clad = _clad_faces(doc, group)
-            for side, mm in corner_extensions(frame, group["faces"][fi],
-                                              None, clad).items():
-                frame.extend(side, mm)
-                corners += 1
+        frame = frames[fi]
         lay = group["layouts"][fi] if fi < len(group["layouts"]) else None
         panels, placed_layout = groupdata.place(frame.extents, lay, group["recipe"])
         layouts.append(placed_layout)
@@ -539,6 +708,7 @@ def build(doc, faces, group, ensure_params=True):
             _write_comment(ds, gid, values["CT_PanelId"], values["CT_Profile"], panel)
             _store(ds, profiles.dumps({
                 "kind": "panel", "version": groupdata.VERSION, "group": gid, "key": k,
+                "uid": ds.UniqueId,
                 "width": round(panel["width"], 2), "length": round(panel["length"], 2),
                 "kept": round(kept, 4)}))
 
@@ -555,6 +725,7 @@ def build(doc, faces, group, ensure_params=True):
     if leftovers.Count:
         doc.Delete(leftovers)
     summary["removed"] = leftovers.Count
+    summary["copies"] = summary_copies
 
     group["layouts"] = layouts
     save_group(doc, group)
@@ -671,7 +842,7 @@ def group_for_panel(doc, el):
     the next time the cladding is built.
     """
     panel = read_panel(el)
-    if not panel:
+    if not panel or panel.get("kind") == "loose":
         return None, None
     group = load_group(doc, panel["group"])
     if group is None and "recipe" in panel:

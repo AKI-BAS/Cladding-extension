@@ -148,27 +148,89 @@ def group_edits(doc, group, els, library):
 
 
 def split(doc, element_ids):
-    """{group id: [panels]} and [flashing pieces] among the given ids."""
-    by_group, flashings = {}, []
+    """{group id: [panels]}, [loose panels] and [flashing pieces] among the ids."""
+    by_group, loose, flashings = {}, [], []
     for eid in element_ids:
         el = doc.GetElement(eid)
         if not isinstance(el, DirectShape):
             continue
         if el.ApplicationId == revit_build.APP_ID:
-            by_group.setdefault(el.ApplicationDataId, []).append(el)
+            if el.ApplicationDataId.endswith(revit_build.COPY_SUFFIX):
+                loose.append(el)
+            else:
+                by_group.setdefault(el.ApplicationDataId, []).append(el)
         elif el.ApplicationId == revit_flashing.FLASH_APP:
             flashings.append(el)
-    return by_group, flashings
+    return by_group, loose, flashings
+
+
+def loose_edits(doc, els, library):
+    """Apply CT_ edits on copied (loose) panels. Returns (lines, errors)."""
+    lines, errors = [], []
+    for el in els:
+        try:
+            data = revit_build._read(el)
+        except Exception:
+            data = None
+        if not data or data.get("kind") != "loose":
+            continue
+        exp = revit_build.loose_expected(data)
+        copied = data.get("uid") != el.UniqueId          # a copy of a copy
+        cur = revit_params.get_values(el)
+        edits = dict((n, cur[n]) for n in inputs.PANEL_NAMES
+                     if inputs.differs(n, cur.get(n), exp.get(n)))
+        if not edits:
+            t = revit_build.read_type(doc, el)
+            if t and groupdata.type_name(t.get("profile"), t.get("material")) != \
+                    groupdata.type_name(exp["CT_Profile"], exp["CT_Material"]):
+                edits = groupdata.type_edits(t, exp)
+        if not edits and not copied:
+            continue
+        if not data.get("frame"):
+            revit_params.set_values(el, exp)
+            errors.append(u"{}: this copy was made with an older version and can't be "
+                          u"edited; delete it and copy again".format(el.Id))
+            continue
+        try:
+            r = data["recipe"]
+            if "CT_Profile" in edits:
+                r["profile"] = groupdata._find_profile(edits["CT_Profile"],
+                                                       {"profiles": {}}, library)
+            if "CT_Material" in edits:
+                r["material"] = inputs.material(edits["CT_Material"])
+            if "CT_Standoff" in edits:
+                r["standoff"] = inputs.length("CT_Standoff", edits["CT_Standoff"])
+            if "CT_PanelWidth" in edits:
+                data["panel"]["width"] = inputs.length("CT_PanelWidth", edits["CT_PanelWidth"])
+            if "CT_PanelLength" in edits:
+                data["panel"]["length"] = inputs.length("CT_PanelLength", edits["CT_PanelLength"])
+        except ValueError as ex:
+            revit_params.set_values(el, exp)
+            errors.append(u"copied panel {}: {}".format(el.Id, ex))
+            continue
+        revit_build.rebuild_loose(doc, el, data)
+        if edits:
+            lines.append(u"copied panel {}: {}".format(el.Id, u", ".join(sorted(edits))))
+    return lines, errors
 
 
 def run(doc, element_ids, warn=True):
     """Apply every CT_ edit on the given elements. Returns text lines."""
-    by_group, flashings = split(doc, element_ids)
+    by_group, loose, flashings = split(doc, element_ids)
     lines, library = [], None
     for gid, els in by_group.items():
         group = revit_build.load_group(doc, gid)
         if group is None:
             continue                 # made with an older version: Regenerate first
+        # copies (Copy / Ctrl+C) become their own panels before anything else
+        if revit_build.detach_copies(doc, group):
+            moved = [el for el in els
+                     if el.ApplicationDataId.endswith(revit_build.COPY_SUFFIX)]
+            loose.extend(moved)
+            els = [el for el in els if el not in moved]
+            lines.append(u"{} copied panel(s) made independent".format(len(moved)))
+            if not els:
+                continue
         if library is None:
             library = profiles.load_library()
         new_group, changes, error = group_edits(doc, group, els, library)
@@ -197,6 +259,15 @@ def run(doc, element_ids, warn=True):
                 panels = revit_build.group_panels(doc, gid)
                 if panels:
                     _warn(doc, NO_MATERIAL_ID, panels[0].Id)
+    if loose:
+        if library is None:
+            library = profiles.load_library()
+        changes, errors = loose_edits(doc, loose, library)
+        lines.extend(changes)
+        for e in errors:
+            lines.append(u"**Not applied:** " + e)
+        if errors and warn:
+            _warn(doc, BAD_VALUE_ID, loose[0].Id)
     if flashings:
         changes, errors = revit_flashing.apply_edits(doc, flashings)
         lines.extend(changes)
@@ -228,7 +299,8 @@ class CladdingUpdater(IUpdater):
 
     def Execute(self, data):
         try:
-            run(data.GetDocument(), data.GetModifiedElementIds())
+            ids = list(data.GetModifiedElementIds()) + list(data.GetAddedElementIds())
+            run(data.GetDocument(), ids)
         except Exception:
             # Never let an exception escape: Revit would disable the updater.
             try:
@@ -248,4 +320,6 @@ def register(addin_id):
     UpdaterRegistry.RegisterUpdater(updater, True)   # optional: no warning without pyRevit
     UpdaterRegistry.AddTrigger(uid, ElementClassFilter(DirectShape),
                                Element.GetChangeTypeAny())
+    UpdaterRegistry.AddTrigger(uid, ElementClassFilter(DirectShape),
+                               Element.GetChangeTypeElementAddition())
     return updater
