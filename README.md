@@ -24,6 +24,12 @@ Reload pyRevit. A **CladdingTools** tab appears.
 ## Buttons
 - **Apply Cladding**: pick flat faces > choose profile and panel settings >
   live preview > Apply. Panels are cut around doors, windows and sloped edges.
+- **Switch Cladding**: swap existing cladding to another profile (and
+  optionally material) while keeping everything else: panel sizes, joints,
+  cut-outs, corner laps and tags. Select one panel for its whole cladding (use
+  Select Cladding first to be sure), or a few panels to change only those.
+  When the rib spacing differs you choose: keep panel sizes exactly (ribs may
+  be cut at panel edges) or fit widths to whole ribs.
 - **Add Flashings**: select doors/windows (or pick them after clicking), choose
   a flashing type and material. Adds a head, both jambs, and a sill on windows
   that aren't at floor level; doors never get a sill. Also "no sills" and

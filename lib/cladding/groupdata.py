@@ -111,7 +111,9 @@ def place(extents, face_layout, recipe):
     horizontal = r["orientation"] == "horizontal"
     across = (v_min, v_max) if horizontal else (u_min, u_max)
     along = (u_min, u_max) if horizontal else (v_min, v_max)
-    cover = layout.snapped_cover_width(r)
+    # After Switch Cladding with "keep sizes", the old standard width is kept
+    # exactly instead of snapping to the new profile's ribs.
+    cover = float(r["cover_exact"]) if r.get("cover_exact") else layout.snapped_cover_width(r)
     joint = float(r["joint"])
     max_len = float(r["max_length"])
     cols_in = list((face_layout or {}).get("cols") or [])
@@ -263,6 +265,7 @@ def apply_edits(group, panel_edits, panel_count, library):
     v = first("CT_CoverWidth")
     if v is not None:
         r["cover_width"] = inputs.length("CT_CoverWidth", v)
+        r.pop("cover_exact", None)
         changes.append(u"standard width → {:g} mm".format(layout.snapped_cover_width(r)))
     v = first("CT_MaxLength")
     if v is not None:
@@ -303,6 +306,7 @@ def apply_edits(group, panel_edits, panel_count, library):
     if all_panels and len(widths) == len(panel_edits) and \
             not any(inputs.differs("CT_PanelWidth", x, widths[0]) for x in widths):
         r["cover_width"] = inputs.length("CT_PanelWidth", widths[0])
+        r.pop("cover_exact", None)
         for lay in g["layouts"]:
             for col in lay["cols"]:
                 col["fixed"] = False
@@ -399,3 +403,60 @@ def type_edits(type_data, expected):
     if inputs.differs("CT_Material", type_data.get("material", u""), expected.get("CT_Material")):
         edits["CT_Material"] = type_data.get("material", u"")
     return edits
+
+
+# --------------------------------------------------------------------------
+# Switch cladding
+# --------------------------------------------------------------------------
+def switch_profile(group, profile, keys=None, material=None, snap=False):
+    """Swap the cladding profile (and optionally material), keeping the layout.
+
+    keys:     None = every panel; else only these panel keys.
+    material: None = keep current materials; a name ("" = none) = use it.
+    snap:     False = keep every panel width exactly (ribs may be cut at the
+              panel edge); True = round widths to whole ribs of the new profile
+              (strips shift a little). Only used when keys is None.
+    Returns (new group, [change descriptions]).
+    """
+    g = copy.deepcopy(group)
+    r = g["recipe"]
+    p = _clean_profile(profile)
+    g["profiles"][p["name"]] = p
+    changes = []
+
+    if keys is None:
+        old_cover = float(r["cover_exact"]) if r.get("cover_exact") \
+            else layout.snapped_cover_width(r)
+        r["profile"] = p
+        for ov in g["overrides"].values():
+            ov.pop("profile", None)
+        if snap:
+            r.pop("cover_exact", None)
+            m = _module(p)
+            for lay in g["layouts"]:
+                for col in lay["cols"]:
+                    if col.get("fixed"):
+                        col["width"] = round(max(1, int(round(col["width"] / m))) * m, 2)
+            changes.append(u"all panels → {}, widths snapped to its ribs ({:g} mm standard)"
+                           .format(p["name"], round(layout.snapped_cover_width(r), 1)))
+        else:
+            r["cover_exact"] = round(old_cover, 2)
+            changes.append(u"all panels → {}, panel sizes kept".format(p["name"]))
+        if material is not None:
+            r["material"] = inputs.material(material)
+            for ov in g["overrides"].values():
+                ov.pop("material", None)
+            changes.append(u"all panels → material {}".format(r["material"] or u"none"))
+    else:
+        for k in keys:
+            ov = g["overrides"].setdefault(k, {})
+            ov["profile"] = p["name"]
+            if material is not None:
+                ov["material"] = inputs.material(material)
+        changes.append(u"{} selected panel(s) → {}{}".format(
+            len(keys), p["name"],
+            u", material {}".format(inputs.material(material) or u"none")
+            if material is not None else u""))
+    g["overrides"] = dict((k, v) for k, v in g["overrides"].items() if v)
+    return g, changes
+
