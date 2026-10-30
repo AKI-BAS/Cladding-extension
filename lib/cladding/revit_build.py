@@ -698,12 +698,14 @@ def _marks_storage(doc):
     return None, {"kind": "marks", "next": 1, "map": {}}
 
 
-def number_panels(doc):
-    """Give every cladding panel in the project (copies included) a mark.
-    Identical panels share a mark; marks are kept in the project so they
-    don't change when new sizes appear. Returns the number of marks in use."""
-    panels = [ds for ds in FilteredElementCollector(doc).OfClass(DirectShape)
-              if ds.ApplicationId == APP_ID]
+def number_panels(doc, panels=None):
+    """Give cladding panels a mark (all panels in the project when `panels`
+    is None). Identical panels share a mark project-wide; marks are kept in
+    the project so they don't change when new sizes appear.
+    Returns the number of distinct marks among the panels handled."""
+    if panels is None:
+        panels = [ds for ds in FilteredElementCollector(doc).OfClass(DirectShape)
+                  if ds.ApplicationId == APP_ID]
     if not panels:
         return 0
     store, data = _marks_storage(doc)
@@ -724,6 +726,110 @@ def number_panels(doc):
             store = DataStorage.Create(doc)
         _store(store, profiles.dumps(data))
     return len(set(keys.values()))
+
+
+# --------------------------------------------------------------------------
+# Fingerprints: rebuild only panels whose shape inputs changed
+# --------------------------------------------------------------------------
+FINGERPRINT_VERSION = "1"
+
+
+def _r(x, step=0.1):
+    return round(float(x) / step) * step
+
+
+def _trim_context(frame):
+    """(hole boxes, outline points) of a face in its (u, v) frame, cached."""
+    ctx = getattr(frame, "_trim_ctx", None)
+    if ctx is not None:
+        return ctx
+    loops = []
+    for loop in frame.face.EdgeLoops:
+        pts = []
+        for edge in loop:
+            for p in edge.Tessellate():
+                if getattr(frame, "curved", False):
+                    pts.append(frame.uv(p))
+                else:
+                    d = p - frame.origin
+                    pts.append((d.DotProduct(frame.right) / MM, d.DotProduct(frame.up) / MM))
+        loops.append(pts)
+
+    def box(pts):
+        us, vs = [p[0] for p in pts], [p[1] for p in pts]
+        return (min(us), max(us), min(vs), max(vs))
+
+    loops.sort(key=lambda pts: (box(pts)[1] - box(pts)[0]) * (box(pts)[3] - box(pts)[2]),
+               reverse=True)
+    outline = loops[0] if loops else []
+    holes = [box(pts) for pts in loops[1:]]
+    ctx = (holes, outline)
+    try:
+        frame._trim_ctx = ctx
+    except Exception:
+        pass
+    return ctx
+
+
+def _overlaps(a, b, pad=1.0):
+    return not (a[1] < b[0] - pad or b[1] < a[0] - pad or a[3] < b[2] - pad or b[3] < a[2] - pad)
+
+
+def fingerprint(frame, panel, recipe, material_name):
+    """Text that changes whenever anything that shapes this panel changes:
+    where the wall is, the panel's size and position, profile, standoff,
+    material, perforation, overhangs, corner extensions and the openings or
+    wall edges it touches. Equal fingerprint = geometry can be kept."""
+    import hashlib
+    from cladding import perforation
+    if recipe["orientation"] == "horizontal":
+        rect = (panel["u0"], panel["u0"] + panel["length"],
+                panel["v0"], panel["v0"] + panel["width"])
+    else:
+        rect = (panel["u0"], panel["u0"] + panel["width"],
+                panel["v0"], panel["v0"] + panel["length"])
+    holes, outline = _trim_context(frame)
+    prof = recipe["profile"]
+    parts = [
+        FINGERPRINT_VERSION,
+        "curved" if getattr(frame, "curved", False) else "flat",
+        [_r(c, 0.01) for c in ((frame.center.X, frame.center.Y, frame.radius,
+                                frame.theta_ref, frame._z0, frame.s)
+                               if getattr(frame, "curved", False) else
+                               (frame.origin.X, frame.origin.Y, frame.origin.Z,
+                                frame.normal.X, frame.normal.Y, frame.normal.Z,
+                                frame.up.X, frame.up.Y, frame.up.Z))],
+        [_r(x) for x in rect],
+        recipe["orientation"],
+        prof.get("name"), _r(prof.get("thickness", 0.7), 0.01),
+        [[_r(x), _r(z)] for x, z in profiles.profile_points(prof)],
+        _r(recipe["standoff"]), material_name or u"",
+        perforation.label(recipe.get("perforation")),
+        [[_r(x) for x in b] for b in panel.get("over", [])],
+        [[_r(x) for x in b] for b in getattr(frame, "_boxes", []) if _overlaps(b, rect)],
+        [[_r(x, 0.5) for x in h] for h in holes if _overlaps(h, rect)],
+        [[_r(u, 0.5), _r(v, 0.5)] for u, v in outline
+         if rect[0] - 1 <= u <= rect[1] + 1 and rect[2] - 1 <= v <= rect[3] + 1],
+        # the wall's size only matters to panels that reach its edge
+        [_r(x) for x in frame.extents] if (
+            rect[0] <= frame.extents[0] + 1 or rect[1] >= frame.extents[1] - 1 or
+            rect[2] <= frame.extents[2] + 1 or rect[3] >= frame.extents[3] - 1) else "inside",
+    ]
+    text = profiles.dumps(parts)
+    try:
+        return hashlib.md5(text.encode("utf-8") if not isinstance(text, str)
+                           else text).hexdigest()
+    except Exception:
+        return text
+
+
+def _store_if_changed(el, payload):
+    try:
+        if _read(el) == profiles.loads(payload):
+            return
+    except Exception:
+        pass
+    _store(el, payload)
 
 
 def face_frames(doc, faces, group):
@@ -1062,7 +1168,7 @@ def rebuild_loose(doc, ds, data):
     _store(ds, profiles.dumps(data))
     revit_params.set_values(ds, loose_expected(data))
     revit_params.set_values(ds, {"CT_Cut": u""})
-    number_panels(doc)
+    number_panels(doc, [ds])
 
 
 def build(doc, faces, group, ensure_params=True):
@@ -1089,17 +1195,19 @@ def build(doc, faces, group, ensure_params=True):
         except Exception:
             pd = None
         if pd and pd.get("key") and pd["key"] not in existing:
-            existing[pd["key"]] = ds
+            existing[pd["key"]] = (ds, pd)
         else:
             stray.append(ds)              # older version, or a duplicate
 
     mat_cache, type_cache, missing = {}, {}, set()
-    summary = {"created": 0, "updated": 0, "removed": 0, "skipped": 0, "trimmed": 0,
+    summary = {"created": 0, "updated": 0, "unchanged": 0, "removed": 0, "skipped": 0,
+               "trimmed": 0,
                "missing_materials": [],
                "totals": {"cover_area_m2": 0.0, "developed_area_m2": 0.0, "weight_kg": 0.0,
                           "total_length_m": 0.0, "count": 0}}
     layouts = []
 
+    built = []
     frames, corners = face_frames(doc, faces, group)
     for fi, (ref, face) in enumerate(faces):
         frame = frames[fi]
@@ -1113,34 +1221,46 @@ def build(doc, faces, group, ensure_params=True):
             mname = recipe["material"] or u""
             perf = recipe.get("perforation")
             mat = panel_material(doc, mname, perf, mat_cache, missing)
-            try:
-                solid = panel_solid(frame, panel, recipe, mat)
-            except Exception as ex:
-                print(u"Panel {} skipped: {}".format(k, ex))
-                summary["skipped"] += 1
-                continue
-            solid, kept = trimmed(frame, solid, panel, recipe["orientation"], mat)
-            if solid is None:
-                summary["skipped"] += 1          # fully inside an opening
-                continue
+            sig = fingerprint(frame, panel, recipe, mname)
+            entry = existing.get(k)
+            same = entry is not None and entry[1].get("sig") == sig and "kept" in entry[1]
+            if same:
+                # nothing that shapes this panel changed: keep its geometry
+                ds, kept = entry[0], float(entry[1]["kept"])
+                existing.pop(k)
+                summary["unchanged"] += 1
+            else:
+                try:
+                    solid = panel_solid(frame, panel, recipe, mat)
+                except Exception as ex:
+                    print(u"Panel {} skipped: {}".format(k, ex))
+                    summary["skipped"] += 1
+                    continue
+                solid, kept = trimmed(frame, solid, panel, recipe["orientation"], mat)
+                if solid is None:
+                    summary["skipped"] += 1          # fully inside an opening
+                    continue
+                entry = existing.pop(k, None)
+                if entry is None:
+                    ds = DirectShape.CreateElement(
+                        doc, ElementId(BuiltInCategory.OST_GenericModel))
+                    ds.ApplicationId = APP_ID
+                    ds.ApplicationDataId = gid
+                    summary["created"] += 1
+                else:
+                    ds = entry[0]
+                    summary["updated"] += 1
+                shapes = List[GeometryObject]()
+                shapes.Add(solid)
+                ds.SetShape(shapes)
             if kept < 0.999:
                 summary["trimmed"] += 1
+            built.append(ds)
 
-            ds = existing.pop(k, None)
-            if ds is None:
-                ds = DirectShape.CreateElement(doc, ElementId(BuiltInCategory.OST_GenericModel))
-                ds.ApplicationId = APP_ID
-                ds.ApplicationDataId = gid
-                summary["created"] += 1
-            else:
-                summary["updated"] += 1
             values = groupdata.expected_values(group, k, panel["width"], panel["length"])
             ptype = panel_type(doc, values["CT_Profile"], mname, type_cache, perf)
             if ds.GetTypeId() != ptype.Id:
                 ds.SetTypeId(ptype.Id)
-            shapes = List[GeometryObject]()
-            shapes.Add(solid)
-            ds.SetShape(shapes)
 
             for q in ("CT_CoverArea", "CT_DevelopedArea", "CT_Weight"):
                 values[q] *= kept                # cut-outs reduce the quantities
@@ -1148,9 +1268,9 @@ def build(doc, faces, group, ensure_params=True):
             values["CT_Cut"] = u"Cut" if kept < 0.999 else u""
             revit_params.set_values(ds, values)
             _write_comment(ds, gid, values["CT_PanelId"], values["CT_Profile"], panel)
-            _store(ds, profiles.dumps({
+            _store_if_changed(ds, profiles.dumps({
                 "kind": "panel", "version": groupdata.VERSION, "group": gid, "key": k,
-                "uid": ds.UniqueId,
+                "uid": ds.UniqueId, "sig": sig,
                 "width": round(panel["width"], 2), "length": round(panel["length"], 2),
                 "kept": round(kept, 4)}))
 
@@ -1162,7 +1282,7 @@ def build(doc, faces, group, ensure_params=True):
             t["weight_kg"] += values["CT_Weight"]
 
     leftovers = List[ElementId]()
-    for ds in list(existing.values()) + stray:
+    for ds in [e[0] for e in existing.values()] + stray:
         leftovers.Add(ds.Id)
     if leftovers.Count:
         doc.Delete(leftovers)
@@ -1173,7 +1293,7 @@ def build(doc, faces, group, ensure_params=True):
     save_group(doc, group)
     summary["missing_materials"] = sorted(missing)
     summary["params"] = param_report
-    summary["marks"] = number_panels(doc)
+    summary["marks"] = number_panels(doc, built)
     summary["corners"] = corners
     return summary
 
@@ -1211,8 +1331,10 @@ def new_group_id():
 def _write_comment(el, group_id, panel_id, profile_name, panel):
     c = el.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
     if c is not None and not c.IsReadOnly:
-        c.Set(u"Cladding {} | {} | {} | {:.0f} x {:.0f} mm".format(
-            group_id, panel_id, profile_name, panel["width"], panel["length"]))
+        text = u"Cladding {} | {} | {} | {:.0f} x {:.0f} mm".format(
+            group_id, panel_id, profile_name, panel["width"], panel["length"])
+        if c.AsString() != text:
+            c.Set(text)
 
 
 # --------------------------------------------------------------------------

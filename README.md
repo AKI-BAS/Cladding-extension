@@ -197,9 +197,14 @@ to the automatic corner.
 - **CT_Material** (Materials and Finishes, material picker) and **CT_Profile** (flashing type) can be changed per piece
   too, or pick another `Flashing - <type> - <material>` type in the Type
   Selector. The piece is rebuilt in place.
-- Running Add Flashings again on a door/window replaces its flashings, e.g.
-  after the cladding or the opening changed (flashings don't follow cladding
-  changes by themselves).
+- Flashings follow their door/window: move or resize it (or the wall) and the
+  pieces are rebuilt in place at the new position, keeping type, material,
+  standoff and tags. The cladding's cut-outs follow too (only the panels
+  around the old and new position are rebuilt). This needs live updates; with
+  them off, use Regenerate on the cladding or Add Flashings > Update
+  flashings. Sides you deleted stay deleted; a sill is removed when a window
+  moves down to floor level.
+- Running Add Flashings again on a door/window replaces its flashings.
 - Types are named `Flashing - <type> - <material>`. Parameters: CT_Profile
   (type), CT_Material, CT_PanelLength (run length), CT_DevelopedArea, CT_Weight,
   CT_PanelId (e.g. "Window 345678 head"), CT_Group = "Flashing".
@@ -223,6 +228,17 @@ Either a `pattern` of segments or raw `points` (mm, x across, z depth):
 ```
 Segment types: `flat`, `zig`, `sine`, `trapezoid` (`top`, `bottom`), `seam` (`seam`).
 Optional `density` in kg/m3 (default steel 7850).
+
+## Speed
+Every edit or Regenerate works out the layout for all panels (fast) but only
+rebuilds the geometry of panels whose shape actually changed. Each panel
+keeps a fingerprint of what shapes it (wall position, size, profile,
+standoff, material, perforation, overhangs, corner extensions and the
+openings/edges it touches). Change one panel and only that panel is rebuilt;
+move a window and only the panels around its old and new position are.
+Parameters are only written when their value changes, and panel marks are
+only updated for panels that were built. The first Regenerate after this
+update rebuilds everything once (no fingerprints yet).
 
 ## Known limits
 - Curved faces: walls curved in plan (vertical cylindrical faces) work with

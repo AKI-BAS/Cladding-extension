@@ -221,6 +221,69 @@ def loose_edits(doc, els, library):
     return lines, errors
 
 
+def follow_hosts(doc, element_ids):
+    """Doors/windows/walls that changed: update the cladding on those walls
+    (only panels whose shape changed are rebuilt) and the flashings around
+    those openings. Returns text lines."""
+    from Autodesk.Revit.DB import Wall, FamilyInstance, Reference
+    walls, openings = {}, {}
+    for eid in element_ids:
+        el = doc.GetElement(eid)
+        if el is None:
+            continue
+        if revit_flashing.is_opening(el):
+            openings[el.Id] = el
+            host = getattr(el, "Host", None)
+            if isinstance(host, Wall):
+                walls[host.Id] = host
+        elif isinstance(el, Wall):
+            walls[el.Id] = el
+            try:
+                for iid in el.FindInserts(True, False, False, False):
+                    ins = doc.GetElement(iid)
+                    if ins is not None and revit_flashing.is_opening(ins):
+                        openings[ins.Id] = ins
+            except Exception:
+                pass
+    if not walls and not openings:
+        return []
+    lines = []
+    if walls:
+        wall_ids = set(walls.keys())
+        for _, g in revit_build._group_storages(doc):
+            on_wall = False
+            for s in g.get("faces", []):
+                try:
+                    if Reference.ParseFromStableRepresentation(doc, s).ElementId in wall_ids:
+                        on_wall = True
+                        break
+                except Exception:
+                    pass
+            if not on_wall:
+                continue
+            try:
+                summary = revit_build.build(doc, revit_build.resolve_faces(doc, g["faces"]), g,
+                                            ensure_params=False)
+                if summary["updated"] or summary["created"] or summary["removed"]:
+                    lines.append(u"cladding {}: {} panel(s) rebuilt to follow the wall/openings"
+                                 .format(g["group"], summary["updated"] + summary["created"]))
+            except Exception as ex:
+                lines.append(u"**cladding {} not updated:** {}".format(g["group"], ex))
+    library, cache = None, {}
+    for inst in openings.values():
+        if not revit_flashing.existing(doc, inst):
+            continue
+        if library is None:
+            library = revit_flashing.flashing.load_library()
+        try:
+            line = revit_flashing.refresh(doc, inst, library, cache)
+            if line:
+                lines.append(line)
+        except Exception as ex:
+            lines.append(u"**flashings not moved:** {}".format(ex))
+    return lines
+
+
 def run(doc, element_ids, warn=True):
     """Apply every CT_ edit on the given elements. Returns text lines."""
     by_group, loose, flashings = split(doc, element_ids)
@@ -306,8 +369,10 @@ class CladdingUpdater(IUpdater):
 
     def Execute(self, data):
         try:
+            doc = data.GetDocument()
             ids = list(data.GetModifiedElementIds()) + list(data.GetAddedElementIds())
-            run(data.GetDocument(), ids)
+            run(doc, ids)
+            follow_hosts(doc, list(data.GetModifiedElementIds()))
         except Exception:
             # Never let an exception escape: Revit would disable the updater.
             try:
@@ -329,4 +394,14 @@ def register(addin_id):
                                Element.GetChangeTypeAny())
     UpdaterRegistry.AddTrigger(uid, ElementClassFilter(DirectShape),
                                Element.GetChangeTypeElementAddition())
+    # doors, windows and walls: cladding cut-outs and flashings follow them
+    from Autodesk.Revit.DB import (ElementMulticategoryFilter, BuiltInCategory,
+                                   ElementCategoryFilter)
+    from System.Collections.Generic import List as NetList
+    cats = NetList[BuiltInCategory]()
+    for c in (BuiltInCategory.OST_Doors, BuiltInCategory.OST_Windows,
+              BuiltInCategory.OST_Walls):
+        cats.Add(c)
+    UpdaterRegistry.AddTrigger(uid, ElementMulticategoryFilter(cats),
+                               Element.GetChangeTypeGeometry())
     return updater

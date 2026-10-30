@@ -337,3 +337,55 @@ def apply_edits(doc, pieces, library=None):
         changes.append(u"{} {}: {}, {}, standoff {:g} mm".format(
             info.label, data["side"], new_type["name"], new_mat or u"no material", new_off))
     return changes, errors
+
+
+# --------------------------------------------------------------------------
+# Follow moved / resized doors and windows
+# --------------------------------------------------------------------------
+def refresh(doc, inst, library=None, type_cache=None):
+    """Rebuild an opening's flashing pieces in place at its current position.
+
+    Keeps each piece's type, material and standoff (and tags). Sides that
+    were deleted by hand stay deleted; a sill is removed when the window is
+    now at floor level. Returns a text line, or None when nothing was done.
+    """
+    pieces = existing(doc, inst)
+    if not pieces:
+        return None
+    library = library if library is not None else flashing.load_library()
+    type_cache = type_cache if type_cache is not None else {}
+    info = OpeningInfo(doc, inst)
+    allowed = set(flashing.sides_for(info.kind, info.rect, info.frame.extents, True))
+    remove_ids = List[ElementId]()
+    done = 0
+    for ds in pieces:
+        try:
+            data = revit_build._read(ds)
+            ftype = flashing.find_type(data["type"], library)
+        except Exception:
+            continue
+        if data["side"] not in allowed:
+            remove_ids.Add(ds.Id)
+            continue
+        standoff = data.get("standoff")
+        if standoff is None:
+            standoff = flashing.default_standoff(info.recipe)
+        if build_side(doc, ds, inst, info, data["side"], ftype,
+                      data.get("material", u""), standoff, type_cache) is None:
+            remove_ids.Add(ds.Id)
+        else:
+            done += 1
+    if remove_ids.Count:
+        doc.Delete(remove_ids)
+    return u"{}: {} flashing piece(s) moved with it{}".format(
+        info.label, done, u", {} removed".format(remove_ids.Count) if remove_ids.Count else u"")
+
+
+def openings_with_flashings(doc):
+    ids = set(ds.ApplicationDataId for ds in existing(doc))
+    out = []
+    for uid in ids:
+        el = doc.GetElement(uid)
+        if el is not None and is_opening(el):
+            out.append(el)
+    return out

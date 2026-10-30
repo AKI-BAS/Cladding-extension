@@ -209,7 +209,9 @@ def _material_id(doc, name):
 
 
 def set_values(el, values):
-    """values: {name: mm / m2 / number / text}. Silently skips missing params."""
+    """values: {name: mm / m2 / number / text}. Silently skips missing params.
+    Only writes values that actually differ, so unchanged panels aren't
+    touched (keeps edits fast and avoids needless updates)."""
     for name, v in values.items():
         p = el.LookupParameter(name)
         if p is None or p.IsReadOnly or v is None:
@@ -217,15 +219,22 @@ def set_values(el, values):
         kind = inputs.KINDS.get(name, "text")
         try:
             if p.StorageType == StorageType.ElementId:
-                p.Set(_material_id(el.Document, v))
+                new = _material_id(el.Document, v)
+                if p.AsElementId() != new:
+                    p.Set(new)
             elif p.StorageType == StorageType.String:
-                p.Set(u"{}".format(v))
-            elif kind == "length":
-                p.Set(float(v) * MM)
-            elif kind == "area":
-                p.Set(float(v) * SQFT_PER_M2)
+                new = u"{}".format(v)
+                if (p.AsString() or u"") != new:
+                    p.Set(new)
             else:
-                p.Set(float(v))
+                if kind == "length":
+                    new = float(v) * MM
+                elif kind == "area":
+                    new = float(v) * SQFT_PER_M2
+                else:
+                    new = float(v)
+                if not p.HasValue or abs(p.AsDouble() - new) > 1e-9:
+                    p.Set(new)
         except Exception as ex:
             print(u"Couldn't set {}: {}".format(name, ex))
 

@@ -47,13 +47,30 @@ if not openings:
 if not openings:
     script.exit()
 
-ADD, NO_SILL, REMOVE = ("Add flashings (head, jambs, sill)",
-                        "Add flashings, no sills",
-                        "Remove flashings")
+ADD, NO_SILL, REMOVE, UPDATE = ("Add flashings (head, jambs, sill)",
+                                "Add flashings, no sills",
+                                "Remove flashings",
+                                "Update flashings (follow moved/resized doors and windows)")
 action = forms.CommandSwitchWindow.show(
-    [ADD, NO_SILL, REMOVE],
+    [ADD, NO_SILL, UPDATE, REMOVE],
     message=u"{} door(s)/window(s) selected".format(len(openings)))
 if not action:
+    script.exit()
+
+if action == UPDATE:
+    with revit.Transaction("Update flashings"):
+        lines = []
+        for o in openings:
+            try:
+                line = revit_flashing.refresh(doc, o)
+                lines.append(line or u"{} {}: no flashings".format(
+                    revit_flashing.opening_kind(o).capitalize(), o.Id))
+            except Exception as ex:
+                lines.append(u"**{} {}:** {}".format(
+                    revit_flashing.opening_kind(o).capitalize(), o.Id, ex))
+    out.print_md(u"### Update flashings")
+    for line in lines:
+        out.print_md(u"- " + line)
     script.exit()
 
 if action == REMOVE:

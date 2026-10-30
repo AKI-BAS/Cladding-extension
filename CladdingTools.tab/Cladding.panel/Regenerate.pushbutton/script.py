@@ -84,6 +84,17 @@ with revit.Transaction("Regenerate cladding"):
         g = revit_build.load_group(doc, gid)
         if g:
             neighbors += revit_build.rebuild_neighbors(doc, g)
+    # flashings around the openings in these walls follow them too
+    from Autodesk.Revit.DB import Reference
+    wall_ids = []
+    for gid in groups:
+        g = revit_build.load_group(doc, gid)
+        for st in (g or {}).get("faces", []):
+            try:
+                wall_ids.append(Reference.ParseFromStableRepresentation(doc, st).ElementId)
+            except Exception:
+                pass
+    follow_lines = [l for l in live.follow_hosts(doc, wall_ids) if "flashing" in l]
 
 # --- report ------------------------------------------------------------------------
 out.print_md(u"### Regenerate")
@@ -103,10 +114,11 @@ for gid, summary, err in results:
     t = summary["totals"]
     if summary.get("copies"):
         out.print_md(u"- {} copied panel(s) made independent".format(summary["copies"]))
-    out.print_md(u"- Cladding `{}`: {} panels updated in place, {} new, {} removed, "
-                 u"{} cut around openings. Sheet {:.1f} m², {:.0f} kg".format(
-                     gid, summary["updated"], summary["created"], summary["removed"],
-                     summary["trimmed"], t["developed_area_m2"], t["weight_kg"]))
+    out.print_md(u"- Cladding `{}`: {} panels rebuilt, {} unchanged (kept), {} new, "
+                 u"{} removed, {} cut around openings. Sheet {:.1f} m², {:.0f} kg".format(
+                     gid, summary["updated"], summary.get("unchanged", 0), summary["created"],
+                     summary["removed"], summary["trimmed"], t["developed_area_m2"],
+                     t["weight_kg"]))
     if summary.get("corners"):
         out.print_md(u"  - {} corner joint(s) with other cladding".format(summary["corners"]))
     if summary["missing_materials"]:
@@ -114,6 +126,8 @@ for gid, summary, err in results:
             u", ".join(summary["missing_materials"])))
 if neighbors:
     out.print_md(u"- {} neighbouring cladding(s) updated so the corners match".format(neighbors))
+for line in follow_lines:
+    out.print_md(u"- " + line)
 for line in revit_params.describe(report):
     out.print_md(u"- " + line)
 
