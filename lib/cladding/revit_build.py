@@ -115,6 +115,33 @@ class FaceFrame(object):
                     self._boxes.append((u_end - mm, u_end + 1.0, lo, hi))
         self._prisms = {}
 
+    def _box_solid(self, box, opts, depth):
+        u0, u1, v0, v1 = box
+        pts = [self.point(u0, v0, -1.0), self.point(u1, v0, -1.0),
+               self.point(u1, v1, -1.0), self.point(u0, v1, -1.0)]
+        loop = CurveLoop()
+        for a, b in zip(pts, pts[1:] + pts[:1]):
+            loop.Append(Line.CreateBound(a, b))
+        bl = List[CurveLoop]()
+        bl.Add(loop)
+        return GeometryCreationUtilities.CreateExtrusionGeometry(bl, self.normal, depth, opts)
+
+    def prism_with(self, material_id, boxes):
+        """prism() plus extra boxes (panel overhang past the face)."""
+        base = self.prism(material_id)
+        if not boxes:
+            return base
+        opts = SolidOptions(material_id, ElementId.InvalidElementId)
+        depth = (TRIM_DEPTH + 1.0) * MM
+        solid = base
+        for box in boxes:
+            try:
+                solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                    solid, self._box_solid(box, opts, depth), BooleanOperationsType.Union)
+            except Exception as ex:
+                print(u"Overhang skipped: {}".format(ex))
+        return solid
+
     def prism(self, material_id):
         """The face outline (with door/window holes, plus any corner
         extensions) pushed out in front of the face. Panels are intersected
@@ -309,12 +336,15 @@ def trimmed(frame, solid, panel, orientation, material_id):
     """(solid cut to the face, kept fraction 0..1). (None, 0) when nothing is left."""
     try:
         cut = BooleanOperationsUtils.ExecuteBooleanOperation(
-            solid, frame.prism(material_id), BooleanOperationsType.Intersect)
+            solid, frame.prism_with(material_id, panel.get("over")),
+            BooleanOperationsType.Intersect)
         if cut is None or cut.Volume < 1e-9:
             return None, 0.0
         return cut, min(1.0, cut.Volume / solid.Volume)
     except Exception:
         # Boolean failed (rare, odd geometry): fall back to keep/skip by centre
+        if panel.get("over"):
+            return solid, 1.0
         if orientation == "horizontal":
             cu, cv = panel["u0"] + panel["length"] / 2.0, panel["v0"] + panel["width"] / 2.0
         else:

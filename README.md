@@ -24,12 +24,13 @@ Reload pyRevit. A **CladdingTools** tab appears.
 ## Buttons
 - **Apply Cladding**: pick flat faces > choose profile and panel settings >
   live preview > Apply. Panels are cut around doors, windows and sloped edges.
-- **Switch Cladding**: swap existing cladding to another profile (and
-  optionally material) while keeping everything else: panel sizes, joints,
-  cut-outs, corner laps and tags. Select one panel for its whole cladding (use
-  Select Cladding first to be sure), or a few panels to change only those.
-  When the rib spacing differs you choose: keep panel sizes exactly (ribs may
-  be cut at panel edges) or fit widths to whole ribs.
+- **Switch Cladding**: select a panel of existing cladding and click. The
+  same window as Apply Cladding opens, filled in with that cladding's
+  settings. Change the profile, material, widths, joint, standoff or
+  orientation and click **Switch cladding**. Only what you changed is
+  applied; panel sizes, cut-outs, corner laps and tags are kept. With a new
+  profile, "Keep panel sizes exactly" keeps every panel where it is (ribs may
+  be cut at panel edges); untick it to fit widths to whole ribs.
 - **Add Flashings**: select doors/windows (or pick them after clicking), choose
   a flashing type and material. Adds a head, both jambs, and a sill on windows
   that aren't at floor level; doors never get a sill. Also "no sills" and
@@ -55,8 +56,8 @@ output says which it is and why.
 
 | Parameter | What it does |
 |---|---|
-| CT_PanelWidth | Width of that panel's strip, snapped to whole profile modules. Later strips shift along. |
-| CT_PanelLength | Length of that panel. Later panels in the strip re-split the rest. |
+| CT_PanelWidth | Width of that panel's strip, snapped to whole profile modules. Later strips shift along. On the last strip it can reach past the wall edge. |
+| CT_PanelLength | Length of that panel. Later panels in the strip re-split the rest. A length you set is kept even past the edge of the wall, so a panel can run up onto the wall above. |
 | CT_Profile | Profile of that panel (any library profile name) |
 | CT_Material | Material of that panel. A real Material parameter under **Materials and Finishes**: pick from the project's materials. |
 

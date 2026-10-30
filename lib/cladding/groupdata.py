@@ -125,23 +125,50 @@ def place(extents, face_layout, recipe):
         spec = cols_in[c] if c < len(cols_in) else {}
         fixed_w = bool(spec.get("fixed"))
         req_w = float(spec["width"]) if fixed_w else cover
-        w = min(req_w, across[1] - a)
+        # A width/length set by hand is kept even past the face edge (e.g. up
+        # onto the wall above); defaults stop at the edge.
+        w = req_w if fixed_w else min(req_w, across[1] - a)
         pieces = _pieces(run, joint, max_len, spec.get("pieces"))
         b = along[0]
         for k, p in enumerate(pieces):
             if b >= along[1] - MIN_PIECE:
                 pieces = pieces[:k]
                 break
-            L = min(p["length"], along[1] - b)
+            L = p["length"] if p.get("fixed") else min(p["length"], along[1] - b)
+            over_along = max(0.0, b + L - along[1])
+            over_across = max(0.0, a + w - across[1])
             if horizontal:
-                panels.append({"u0": b, "v0": a, "width": w, "length": L, "col": c, "row": k})
+                panel = {"u0": b, "v0": a, "width": w, "length": L, "col": c, "row": k}
             else:
-                panels.append({"u0": a, "v0": b, "width": w, "length": L, "col": c, "row": k})
+                panel = {"u0": a, "v0": b, "width": w, "length": L, "col": c, "row": k}
+            panel["over"] = overshoot_boxes(panel, horizontal, over_along, over_across)
+            panels.append(panel)
             b += L + joint
         cols_out.append({"width": req_w, "fixed": fixed_w, "pieces": pieces})
         a += w + joint
         c += 1
     return panels, {"cols": cols_out}
+
+
+def overshoot_boxes(panel, horizontal, over_along, over_across):
+    """Parts of a panel that reach past the face, as (u0, u1, v0, v1) boxes in
+    the face frame. They are added to the trimming outline so the overhang
+    isn't cut off."""
+    u0, v0 = panel["u0"], panel["v0"]
+    if horizontal:
+        u1, v1 = u0 + panel["length"], v0 + panel["width"]
+        along_box = (u1 - over_along - 1.0, u1, v0, v1)
+        across_box = (u0, u1, v1 - over_across - 1.0, v1)
+    else:
+        u1, v1 = u0 + panel["width"], v0 + panel["length"]
+        along_box = (u0, u1, v1 - over_along - 1.0, v1)
+        across_box = (u1 - over_across - 1.0, u1, v0, v1)
+    boxes = []
+    if over_along > 0.5:
+        boxes.append(along_box)
+    if over_across > 0.5:
+        boxes.append(across_box)
+    return boxes
 
 
 # --------------------------------------------------------------------------
@@ -457,6 +484,64 @@ def switch_profile(group, profile, keys=None, material=None, snap=False):
             len(keys), p["name"],
             u", material {}".format(inputs.material(material) or u"none")
             if material is not None else u""))
+    g["overrides"] = dict((k, v) for k, v in g["overrides"].items() if v)
+    return g, changes
+
+
+def switch_settings(group, new, snap=False):
+    """Make the window's settings the cladding's defaults (Switch Cladding).
+
+    Only what actually changed is applied; panel edits that don't conflict
+    are kept (a changed profile/material/standoff replaces per-panel ones,
+    a changed orientation resets the layout).
+    snap: when the profile changes, round widths to whole ribs instead of
+    keeping panel sizes exactly.
+    Returns (new group, [change descriptions]).
+    """
+    g = copy.deepcopy(group)
+    r = g["recipe"]
+    new = layout.merged(new)
+    changes = []
+
+    if new["orientation"] != r["orientation"]:
+        r["orientation"] = new["orientation"]
+        g["layouts"], g["overrides"] = [], {}
+        changes.append(u"orientation → {} (panel edits reset)".format(new["orientation"]))
+
+    if fold(new["profile"].get("name")) != fold(r["profile"].get("name")):
+        g, c = switch_profile(g, new["profile"], snap=snap)
+        r = g["recipe"]
+        changes.extend(c)
+
+    if inputs.differs("CT_Material", new["material"] or u"", r["material"] or u""):
+        r["material"] = inputs.material(new["material"])
+        for ov in g["overrides"].values():
+            ov.pop("material", None)
+        changes.append(u"material → {} (all panels)".format(r["material"] or u"none"))
+
+    if abs(float(new["standoff"]) - float(r["standoff"])) > 0.05:
+        r["standoff"] = round(float(new["standoff"]), 1)
+        for ov in g["overrides"].values():
+            ov.pop("standoff", None)
+        changes.append(u"standoff → {:g} mm (all panels)".format(r["standoff"]))
+
+    if abs(float(new["joint"]) - float(r["joint"])) > 0.05:
+        r["joint"] = round(float(new["joint"]), 1)
+        changes.append(u"joint → {:g} mm".format(r["joint"]))
+
+    if abs(float(new["cover_width"]) - float(r["cover_width"])) > 0.05:
+        r["cover_width"] = round(float(new["cover_width"]), 1)
+        r.pop("cover_exact", None)
+        changes.append(u"standard width → {:g} mm".format(round(layout.snapped_cover_width(r), 1)))
+
+    if abs(float(new["max_length"]) - float(r["max_length"])) > 0.05:
+        r["max_length"] = round(float(new["max_length"]), 1)
+        for lay in g["layouts"]:
+            for col in lay["cols"]:
+                if not any(p.get("fixed") for p in col.get("pieces", [])):
+                    col["pieces"] = []
+        changes.append(u"max length → {:g} mm".format(r["max_length"]))
+
     g["overrides"] = dict((k, v) for k, v in g["overrides"].items() if v)
     return g, changes
 

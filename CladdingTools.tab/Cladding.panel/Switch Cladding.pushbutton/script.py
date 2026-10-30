@@ -1,87 +1,64 @@
 # -*- coding: utf-8 -*-
-"""Swap the cladding profile (and optionally material) on existing cladding,
-keeping the layout: panel sizes, joints, openings, corner laps and tags.
+"""Change existing cladding in the same window used to create it.
 
-Select one panel to change its whole cladding (or several claddings), or a
-few panels to change just those.
+Select a panel (or Select Cladding first), click Switch Cladding: the window
+opens with the cladding's current settings. Change the profile, material,
+widths, joint, standoff... and click Switch cladding. Panel sizes, cut-outs,
+corner laps and tags are kept; only what you changed is applied.
 """
 __title__ = "Switch\nCladding"
-__doc__ = ("Swap the selected cladding to another profile/material, keeping panel sizes, "
-           "joints, corners and tags.")
+__doc__ = ("Open the cladding window with the selected cladding's settings, change them, "
+           "and switch the cladding over, keeping panel sizes, corners and tags.")
 
 from pyrevit import revit, forms, script
-from Autodesk.Revit.DB import DirectShape, FilteredElementCollector, Material
+from Autodesk.Revit.DB import DirectShape
 
 from cladding import profiles, groupdata, revit_build
+from cladding.window import CladdingWindow
 
 doc = revit.doc
 out = script.get_output()
 
-# --- selection -------------------------------------------------------------------
-groups, picked = {}, {}
+groups = {}
 for el in revit.get_selection():
-    if isinstance(el, DirectShape) and el.ApplicationId == revit_build.APP_ID:
-        g, pd = revit_build.group_for_panel(doc, el)
-        if g and pd:
-            groups.setdefault(g["group"], g)
-            if pd.get("key"):
-                picked.setdefault(g["group"], set()).add(pd["key"])
+    if isinstance(el, DirectShape) and el.ApplicationId == revit_build.APP_ID \
+            and el.ApplicationDataId not in groups:
+        g, _ = revit_build.group_for_panel(doc, el)
+        if g:
+            groups[g["group"]] = g
 if not groups:
-    forms.alert("Select one or more cladding panels first.\n\n"
+    forms.alert("Select a cladding panel first.\n\n"
                 "Tip: select one panel and click Select Cladding to select the whole cladding.",
                 exitscript=True)
 
-total = sum(len(revit_build.group_panels(doc, gid)) for gid in groups)
-selected = sum(len(v) for v in picked.values())
+first = list(groups.values())[0]
+frames, layouts = [], []
+for g in groups.values():
+    try:
+        for i, (_, f) in enumerate(revit_build.resolve_faces(doc, g["faces"])):
+            frames.append(revit_build.FaceFrame(f))
+            layouts.append(g["layouts"][i] if i < len(g["layouts"]) else None)
+    except Exception:
+        pass
 
-# --- what to change ------------------------------------------------------------
-ALL = u"Whole cladding ({} panels)".format(total)
-SOME = u"Only the {} selected panel(s)".format(selected)
-scope = ALL
-if 0 < selected < total:
-    scope = forms.CommandSwitchWindow.show([ALL, SOME], message="Switch which panels?")
-    if not scope:
-        script.exit()
+note = u"Only what you change is applied. Your per-panel sizes are kept; a new profile, " \
+       u"material or standoff replaces per-panel ones."
+if len(groups) > 1:
+    note += u" Showing the first of {} claddings; changes go to all of them.".format(len(groups))
 
-lib = profiles.load_library()
-names = [p["name"] for p in lib]
-current = sorted(set(g["recipe"]["profile"].get("name", "") for g in groups.values()))
-pick = forms.SelectFromList.show(
-    names, title=u"New cladding profile (now: {})".format(u", ".join(current)),
-    multiselect=False)
-if not pick:
+win = CladdingWindow(doc, frames, profiles.load_library(), initial=first["recipe"],
+                     layouts=layouts, mode="switch", note=note)
+win.ShowDialog()
+if not win.result:
     script.exit()
-new_profile = lib[names.index(pick)]
 
-KEEP = "(keep current materials)"
-NONE = "(no material)"
-mats = sorted(m.Name for m in FilteredElementCollector(doc).OfClass(Material))
-mpick = forms.SelectFromList.show([KEEP, NONE] + mats, title="Material", multiselect=False)
-if not mpick:
-    script.exit()
-material = None if mpick == KEEP else (u"" if mpick == NONE else mpick)
-
-snap = False
-if scope == ALL:
-    old_mods = set(round(profiles.module_width(profiles.profile_points(g["recipe"]["profile"])), 1)
-                   for g in groups.values())
-    new_mod = round(profiles.module_width(profiles.profile_points(new_profile)), 1)
-    if old_mods != set([new_mod]):
-        KEEP_SIZES = u"Keep panel sizes exactly (ribs may be cut at panel edges)"
-        SNAP = u"Fit widths to whole {:g} mm ribs (strips shift slightly)".format(new_mod)
-        how = forms.CommandSwitchWindow.show([KEEP_SIZES, SNAP], message="Panel widths")
-        if not how:
-            script.exit()
-        snap = how == SNAP
-
-# --- switch and rebuild ---------------------------------------------------------
 lines, neighbors = [], 0
 with revit.Transaction("Switch cladding"):
     for gid, g in groups.items():
-        keys = None if scope == ALL else sorted(picked.get(gid, []))
-        if keys == []:
+        new_g, changes = groupdata.switch_settings(g, win.result, snap=not win.keep_sizes)
+        if not changes:
+            lines.append(u"`{}`: nothing changed".format(gid))
             continue
-        new_g, changes = groupdata.switch_profile(g, new_profile, keys, material, snap)
         try:
             faces = revit_build.resolve_faces(doc, new_g["faces"])
         except Exception as ex:
@@ -99,10 +76,10 @@ with revit.Transaction("Switch cladding"):
         if g:
             neighbors += revit_build.rebuild_neighbors(doc, g)
 
-out.print_md(u"### Switch cladding → {}".format(pick))
+out.print_md(u"### Switch cladding")
 for line in lines:
     out.print_md(u"- " + line)
 if neighbors:
     out.print_md(u"- {} neighbouring cladding(s) updated so the corners match".format(neighbors))
-out.print_md(u"- Flashings keep their position; run Add Flashings again if the new "
-             u"profile is deeper or shallower.")
+out.print_md(u"- Flashings keep their position; run Add Flashings again if the cladding "
+             u"got deeper or shallower.")
