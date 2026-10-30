@@ -63,7 +63,7 @@ output says which it is and why.
 
 | Parameter | What it does |
 |---|---|
-| CT_PanelWidth | Width of that panel's strip, snapped to whole profile modules. Later strips shift along. On the last strip it can reach past the wall edge. |
+| CT_PanelWidth | Width of that one panel, snapped to whole profile modules, measured from its left edge. No other panel changes or moves; a narrower panel leaves a gap, a wider one overlaps the next. |
 | CT_PanelLength | Length of that panel. Later panels in the strip re-split the rest. A length you set is kept even past the edge of the wall, so a panel can run up onto the wall above. |
 | CT_Profile | Profile of that panel (any library profile name) |
 | CT_Material | Material of that panel. A real Material parameter under **Materials and Finishes**: pick from the project's materials. |

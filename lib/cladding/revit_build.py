@@ -862,7 +862,8 @@ def detach_copies(doc, group, faces=None):
         frames, _ = face_frames(doc, faces, group)
         for fi, frame in enumerate(frames):
             lay = group["layouts"][fi] if fi < len(group["layouts"]) else None
-            panels, _ = groupdata.place(frame.extents, lay, group["recipe"])
+            panels, _ = groupdata.place(frame.extents, lay, group["recipe"],
+                                        groupdata.piece_widths(group, fi))
             for p in panels:
                 placed[groupdata.key(fi, p["col"], p["row"])] = (frame, p)
     except Exception:
@@ -980,7 +981,8 @@ def build(doc, faces, group, ensure_params=True):
     for fi, (ref, face) in enumerate(faces):
         frame = frames[fi]
         lay = group["layouts"][fi] if fi < len(group["layouts"]) else None
-        panels, placed_layout = groupdata.place(frame.extents, lay, group["recipe"])
+        panels, placed_layout = groupdata.place(frame.extents, lay, group["recipe"],
+                                                groupdata.piece_widths(group, fi))
         layouts.append(placed_layout)
         for panel in panels:
             k = groupdata.key(fi, panel["col"], panel["row"])

@@ -99,10 +99,12 @@ def _pieces(run, joint, max_len, stored):
     return out
 
 
-def place(extents, face_layout, recipe):
+def place(extents, face_layout, recipe, piece_widths=None):
     """Panels on one face, and the layout as placed.
 
     extents = (u_min, u_max, v_min, v_max) in the face's frame.
+    piece_widths = {(col, row): mm} for single panels whose width was changed:
+    only that panel gets the width (from its left edge); nothing else moves.
     Returns (panels, layout) where each panel is
     {u0, v0, width, length, col, row} (width across ribs, length along).
     """
@@ -135,12 +137,13 @@ def place(extents, face_layout, recipe):
                 pieces = pieces[:k]
                 break
             L = p["length"] if p.get("fixed") else min(p["length"], along[1] - b)
+            pw = (piece_widths or {}).get((c, k), w)
             over_along = max(0.0, b + L - along[1])
-            over_across = max(0.0, a + w - across[1])
+            over_across = max(0.0, a + pw - across[1])
             if horizontal:
-                panel = {"u0": b, "v0": a, "width": w, "length": L, "col": c, "row": k}
+                panel = {"u0": b, "v0": a, "width": pw, "length": L, "col": c, "row": k}
             else:
-                panel = {"u0": a, "v0": b, "width": w, "length": L, "col": c, "row": k}
+                panel = {"u0": a, "v0": b, "width": pw, "length": L, "col": c, "row": k}
             panel["over"] = overshoot_boxes(panel, horizontal, over_along, over_across)
             panels.append(panel)
             b += L + joint
@@ -169,6 +172,17 @@ def overshoot_boxes(panel, horizontal, over_along, over_across):
     if over_across > 0.5:
         boxes.append(across_box)
     return boxes
+
+
+def piece_widths(group, face):
+    """{(col, row): width} of single panels on one face whose width was set."""
+    out = {}
+    for k, ov in group.get("overrides", {}).items():
+        if "width" in ov:
+            f, c, r = [int(x) for x in k.split(":")]
+            if f == face:
+                out[(c, r)] = float(ov["width"])
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -346,6 +360,8 @@ def apply_edits(group, panel_edits, panel_count, library):
         for lay in g["layouts"]:
             for col in lay["cols"]:
                 col["fixed"] = False
+        for ov in g["overrides"].values():
+            ov.pop("width", None)
         for ed in panel_edits.values():
             ed.pop("CT_PanelWidth", None)
         changes.append(u"standard width → {:g} mm (all panels)".format(
@@ -377,9 +393,8 @@ def apply_edits(group, panel_edits, panel_count, library):
             w = inputs.length("CT_PanelWidth", ed["CT_PanelWidth"])
             m = _module(panel_settings(g, k)["profile"])
             w = max(1, int(round(w / m))) * m
-            c = _ensure_col(g, face, col)
-            c["width"], c["fixed"] = round(w, 2), True
-            changes.append(u"{}: strip width → {:g} mm".format(label, round(w, 1)))
+            ov["width"] = round(w, 2)          # only this panel; nothing else moves
+            changes.append(u"{}: width → {:g} mm (this panel only)".format(label, round(w, 1)))
         if "CT_PanelLength" in ed:
             L = inputs.length("CT_PanelLength", ed["CT_PanelLength"])
             c = _ensure_col(g, face, col)
@@ -482,6 +497,9 @@ def switch_profile(group, profile, keys=None, material=None, snap=False):
                 for col in lay["cols"]:
                     if col.get("fixed"):
                         col["width"] = round(max(1, int(round(col["width"] / m))) * m, 2)
+            for ov in g["overrides"].values():
+                if "width" in ov:
+                    ov["width"] = round(max(1, int(round(ov["width"] / m))) * m, 2)
             changes.append(u"all panels → {}, widths snapped to its ribs ({:g} mm standard)"
                            .format(p["name"], round(layout.snapped_cover_width(r), 1)))
         else:
