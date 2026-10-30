@@ -35,6 +35,9 @@ Reload pyRevit. A **CladdingTools** tab appears.
   a flashing type and material. Adds a head, both jambs, and a sill on windows
   that aren't at floor level; doors never get a sill. Also "no sills" and
   "Remove flashings". See Flashings below.
+- **Trim Corner**: join two claddings at a corner, like Trim/Extend for
+  walls. Pick a panel on each side near the corner and choose which side
+  laps. See Corners.
 - **Select Cladding**: select one panel, click, and every panel of that
   cladding is selected.
 - **Regenerate**: applies every CT_ edit on the selected cladding(s) and
@@ -172,6 +175,14 @@ Which one laps is fixed per corner, so both sides always agree. Apply,
 Regenerate and standoff/profile edits also rebuild the cladding on the other
 side of the corner. Cladding applied before this version: Regenerate it once.
 Corners against walls without cladding are left as they are.
+
+**Trim Corner** sets a corner by hand: pick a panel on each side, choose
+which side laps. At an outside corner the lapping side runs past the corner
+over the other's end, and the other side tucks in under the lapping sheet,
+so no gap shows even with a big standoff. Sizes come from the picked panels
+(their standoff and profile), and the joint is remembered: change a standoff
+and the corner is redone on the next rebuild. "Remove this trim" goes back
+to the automatic corner.
 
 ## Flashings
 - Each side (head, left jamb, right jamb, sill) is its own Generic Model:

@@ -383,6 +383,7 @@ def _clad_faces(doc, current_group):
     for g in groups:
         try:
             surface = flashing.cladding_surface(g["recipe"])
+            standoff = float(g["recipe"].get("standoff", 30))
         except Exception:
             continue
         for s in g.get("faces", []):
@@ -393,7 +394,7 @@ def _clad_faces(doc, current_group):
             except Exception:
                 f = None
             if isinstance(f, PlanarFace):
-                out.append((s, f, surface))
+                out.append((s, f, surface, standoff))
     return out
 
 
@@ -495,7 +496,7 @@ def corner_extensions(frame, my_ref, my_surface, clad_faces):
     out = {}
     for side in (-1, 1):
         best = None
-        for s, f, surface in clad_faces:
+        for s, f, surface, standoff in clad_faces:
             if s == my_ref:
                 continue
             rel = _corner(frame, side, f)
@@ -503,15 +504,16 @@ def corner_extensions(frame, my_ref, my_surface, clad_faces):
                 continue
             gap, turn = rel
             if best is None or gap < best[0]:
-                best = (gap, turn, s, surface)
+                best = (gap, turn, s, surface, standoff)
         if best is None:
             continue
-        gap, turn, s, surface = best
+        gap, turn, s, surface, standoff = best
         laps = my_ref < s
         ext = gap
-        if turn > 0 and laps:          # outside corner
-            ext += surface
-        elif turn < 0 and not laps:    # inside corner
+        if turn > 0:                   # outside corner
+            # lapping side covers the other's end; the other tucks in under it
+            ext += surface if laps else standoff
+        elif not laps:                 # inside corner
             ext -= surface + 1.0
         if abs(ext) > 0.1:
             out[side] = ext
@@ -725,20 +727,141 @@ def number_panels(doc):
 
 
 def face_frames(doc, faces, group):
-    """FaceFrames for a cladding's faces with corner joints applied.
+    """FaceFrames for a cladding's faces with corner joints applied: trimmed
+    corners (Trim Corner) first, automatic corners for the other ends.
     Returns (frames, number of corner adjustments)."""
     frames, clad, corners = [], None, 0
+    joints = load_joints(doc)
     for fi, (ref, face) in enumerate(faces):
         frame = make_frame(face)
+        done = set()
+        if not frame.curved:
+            for side, mm in trim_extensions(doc, group, fi, frame, joints).items():
+                frame.extend(side, mm)
+                done.add(side)
+                corners += 1
         if group["recipe"].get("corners", True) and not frame.curved:
             if clad is None:
                 clad = _clad_faces(doc, group)
             for side, mm in corner_extensions(frame, group["faces"][fi],
                                               None, clad).items():
+                if side in done:
+                    continue
                 frame.extend(side, mm)
                 corners += 1
         frames.append(frame)
     return frames, corners
+
+
+# --------------------------------------------------------------------------
+# Trimmed corners (Trim Corner button)
+# --------------------------------------------------------------------------
+# A joint: {"a": end, "b": end, "lap": "a" | "b"}, end = {"group", "face",
+# "key", "side"}: a cladding face, the panel picked at the corner (its
+# standoff/profile set the sizes) and which end of the face (-1 / +1).
+def load_joints(doc):
+    for ds in FilteredElementCollector(doc).OfClass(DataStorage):
+        try:
+            data = _read(ds)
+        except Exception:
+            continue
+        if data and data.get("kind") == "joints":
+            return data.get("joints", [])
+    return []
+
+
+def save_joints(doc, joints):
+    for ds in FilteredElementCollector(doc).OfClass(DataStorage):
+        try:
+            data = _read(ds)
+        except Exception:
+            continue
+        if data and data.get("kind") == "joints":
+            _store(ds, profiles.dumps({"kind": "joints", "joints": joints}))
+            return
+    _store(DataStorage.Create(doc), profiles.dumps({"kind": "joints", "joints": joints}))
+
+
+def _same_end(e, f):
+    return e["group"] == f["group"] and e["face"] == f["face"] and e["side"] == f["side"]
+
+
+def set_joint(doc, a, b, lap):
+    """Add or replace the joint between ends a and b. lap None removes it."""
+    joints = [j for j in load_joints(doc)
+              if not any(_same_end(j[x], e) for x in ("a", "b") for e in (a, b))]
+    if lap:
+        joints.append({"a": a, "b": b, "lap": lap})
+    save_joints(doc, joints)
+
+
+def _end_sizes(doc, end, current_group):
+    """(standoff, outer surface) in mm of the panel stored for a joint end."""
+    from cladding import flashing
+    g = current_group if end["group"] == current_group["group"] \
+        else load_group(doc, end["group"])
+    if g is None:
+        return None
+    st = groupdata.panel_settings(g, end["key"])
+    r = dict(g["recipe"])
+    r.update(st)
+    return float(st["standoff"]), flashing.cladding_surface(r)
+
+
+def _end_face(doc, end, current_group):
+    g = current_group if end["group"] == current_group["group"] \
+        else load_group(doc, end["group"])
+    try:
+        ref = Reference.ParseFromStableRepresentation(doc, g["faces"][end["face"]])
+        return doc.GetElement(ref.ElementId).GetGeometryObjectFromReference(ref)
+    except Exception:
+        return None
+
+
+def trim_extensions(doc, group, fi, frame, joints):
+    """{side: mm} for ends of this face that are in a trimmed joint.
+
+    Outside corner: the lapping side runs past the corner by the other
+    side's outer surface (covering its end); the other side runs past the
+    corner by the lapping side's standoff, so it tucks in under the lapping
+    sheet and no gap shows. Inside corner: the lapping side runs into the
+    corner, the other stops at the lapping side's outer surface.
+    """
+    out = {}
+    for j in joints:
+        for me, other in (("a", "b"), ("b", "a")):
+            end = j[me]
+            if end["group"] != group["group"] or end["face"] != fi:
+                continue
+            f = _end_face(doc, j[other], group)
+            mine = _end_sizes(doc, end, group)
+            theirs = _end_sizes(doc, j[other], group)
+            if f is None or mine is None or theirs is None or not isinstance(f, PlanarFace):
+                continue
+            rel = _corner(frame, end["side"], f)
+            if rel is None:
+                continue                      # the walls moved apart
+            gap, turn = rel
+            laps = j["lap"] == me
+            if turn > 0:                      # outside corner
+                ext = gap + (theirs[1] if laps else theirs[0])
+            else:                             # inside corner
+                ext = gap if laps else gap - theirs[1] - 1.0
+            out[end["side"]] = ext
+    return out
+
+
+def joint_end(doc, panel_el):
+    """(end dict without side, face, group) for a picked cladding panel."""
+    g, pd = group_for_panel(doc, panel_el)
+    if not g or not pd or "key" not in pd:
+        raise ValueError("pick a panel of a cladding made with Apply Cladding (not a copy)")
+    fi = int(pd["key"].split(":")[0])
+    ref = Reference.ParseFromStableRepresentation(doc, g["faces"][fi])
+    face = doc.GetElement(ref.ElementId).GetGeometryObjectFromReference(ref)
+    if not isinstance(face, PlanarFace):
+        raise ValueError("trimming corners works on flat faces only")
+    return {"group": g["group"], "face": fi, "key": pd["key"]}, face, g
 
 
 # --------------------------------------------------------------------------

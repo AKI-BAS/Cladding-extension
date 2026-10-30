@@ -71,7 +71,7 @@ def _find_material(doc, name):
 
 
 def _dot_pattern(doc, perf):
-    name = u"CladdingTools {}".format(perforation.label(perf))
+    name = perforation.safe_name(u"CladdingTools {}".format(perforation.label(perf)))
     for fp in FilteredElementCollector(doc).OfClass(FillPatternElement):
         if fp.Name == name:
             return fp.Id

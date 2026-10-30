@@ -1,6 +1,6 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Cladding" Width="980" Height="600" MinWidth="860" MinHeight="520"
+        Title="Cladding" Width="1080" Height="820" MinWidth="980" MinHeight="760"
         WindowStartupLocation="CenterScreen" Background="#E6E8EB"
         FontFamily="Segoe UI" FontSize="12" Foreground="#16181B">
     <Window.Resources>
@@ -61,7 +61,7 @@
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="210"/>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="230"/>
+            <ColumnDefinition Width="280"/>
         </Grid.ColumnDefinitions>
 
         <!-- Left: profile library -->
@@ -90,7 +90,12 @@
 
         <!-- Right: panel settings -->
         <DockPanel Grid.Column="2">
-            <StackPanel DockPanel.Dock="Top">
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                <TextBlock x:Name="StatusText" Foreground="#B3261E" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                <Button x:Name="ApplyButton" Style="{StaticResource Dark}" Content="Apply to faces" Click="apply_click"/>
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
                 <TextBlock Style="{StaticResource Label}" Margin="0,0,0,6" Text="Panel"/>
                 <DockPanel Margin="0,4"><TextBlock Text="Cover width (mm)"/>
                     <TextBox x:Name="WidthBox" HorizontalAlignment="Right" Text="1000" TextChanged="on_change"/></DockPanel>
@@ -119,7 +124,7 @@
                         <TextBox x:Name="PerfPBox" Width="40" Text="8" TextChanged="on_change"/>
                     </StackPanel>
                 </DockPanel>
-                <TextBlock x:Name="PerfInfo" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
+                <TextBlock x:Name="PerfInfo" Foreground="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap"/>
                 <TextBlock Style="{StaticResource Label}" Text="Material"/>
                 <ComboBox x:Name="MaterialBox" SelectionChanged="on_change"/>
                 <CheckBox x:Name="KeepSizesBox" Margin="0,12,0,0" IsChecked="True" Visibility="Collapsed"
@@ -131,10 +136,7 @@
                 <TextBlock Style="{StaticResource Label}" Text="Quantities (estimate, picked faces)"/>
                 <TextBlock x:Name="QtyText" FontFamily="Consolas" LineHeight="18"/>
             </StackPanel>
-            <StackPanel DockPanel.Dock="Bottom" VerticalAlignment="Bottom">
-                <TextBlock x:Name="StatusText" Foreground="#B3261E" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                <Button x:Name="ApplyButton" Style="{StaticResource Dark}" Content="Apply to faces" Click="apply_click"/>
-            </StackPanel>
+            </ScrollViewer>
         </DockPanel>
     </Grid>
 </Window>

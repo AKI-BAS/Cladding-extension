@@ -17,7 +17,14 @@ from cladding.profiles import fold
 
 PATTERNS = ("staggered", "straight")
 NONE_WORDS = (u"", u"none", u"no", u"-", u"0", u"engin")
-MARK = u" | perforated "
+MARK = u" - perforated "
+OLD_MARK = u" | perforated "
+BAD_NAME_CHARS = u'\\:{}[]|;<>?`~'
+
+
+def safe_name(name):
+    """Replace characters Revit doesn't allow in names."""
+    return u"".join(u"-" if c in BAD_NAME_CHARS else c for c in name)
 
 
 def normalize(perf):
@@ -88,14 +95,17 @@ def tile(perf):
 
 
 def material_name(base, perf):
-    """Name of the perforated variant of a material."""
-    return u"{}{}{}".format(base or u"CladdingTools", MARK, label(perf))
+    """Name of the perforated variant of a material, e.g.
+    'Stál - perforated Ø5/8 staggered'."""
+    return safe_name(u"{}{}{}".format(base or u"CladdingTools", MARK, label(perf)))
 
 
 def base_material(name):
     """'Stál | perforated Ø5/8 staggered' -> 'Stál'."""
     name = name or u""
     i = name.find(MARK)
+    if i < 0:
+        i = name.find(OLD_MARK)
     base = name[:i] if i >= 0 else name
     return u"" if base == u"CladdingTools" and i >= 0 else base
 
