@@ -91,6 +91,20 @@ are moved to Dimensions; the output window lists what changed.
 
 Cladding made with an older version: select a panel and click Regenerate once.
 
+## Corners
+Where two claddings meet at a corner (two walls, or two faces picked in one
+Apply), exactly one of them covers the corner:
+- **Outside corner:** one cladding runs past the corner by the other
+  cladding's thickness, so the end of the other cladding and the wall corner
+  are covered.
+- **Inside corner:** one cladding is shortened by the other's thickness, so
+  they don't clash.
+
+Which one laps is fixed per corner, so both sides always agree. Apply,
+Regenerate and standoff/profile edits also rebuild the cladding on the other
+side of the corner. Cladding applied before this version: Regenerate it once.
+Corners against walls without cladding are left as they are.
+
 ## Flashings
 - Each side (head, left jamb, right jamb, sill) is its own Generic Model:
   select one and press Delete to remove just that side.

@@ -76,6 +76,11 @@ with revit.Transaction("Regenerate cladding"):
             results.append((gid, None, ex))
             continue
         results.append((gid, revit_build.build(doc, faces, g), None))
+    neighbors = 0
+    for gid in groups:
+        g = revit_build.load_group(doc, gid)
+        if g:
+            neighbors += revit_build.rebuild_neighbors(doc, g)
 
 # --- report ------------------------------------------------------------------------
 out.print_md(u"### Regenerate")
@@ -97,9 +102,13 @@ for gid, summary, err in results:
                  u"{} cut around openings. Sheet {:.1f} m², {:.0f} kg".format(
                      gid, summary["updated"], summary["created"], summary["removed"],
                      summary["trimmed"], t["developed_area_m2"], t["weight_kg"]))
+    if summary.get("corners"):
+        out.print_md(u"  - {} corner joint(s) with other cladding".format(summary["corners"]))
     if summary["missing_materials"]:
         out.print_md(u"  - No material called {} in this project".format(
             u", ".join(summary["missing_materials"])))
+if neighbors:
+    out.print_md(u"- {} neighbouring cladding(s) updated so the corners match".format(neighbors))
 for line in revit_params.describe(report):
     out.print_md(u"- " + line)
 

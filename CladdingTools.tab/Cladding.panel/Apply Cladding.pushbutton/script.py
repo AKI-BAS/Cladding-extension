@@ -167,6 +167,7 @@ if win.result:
     group = groupdata.new_group(revit_build.new_group_id(), win.result)
     with revit.Transaction("Apply cladding"):
         summary = revit_build.build(doc, faces, group)
+        summary["neighbors"] = revit_build.rebuild_neighbors(doc, group)
     t = summary["totals"]
     out = script.get_output()
     out.print_md(u"### Cladding `{}` created".format(group["group"]))
@@ -177,6 +178,10 @@ if win.result:
     if summary["missing_materials"]:
         out.print_md(u"- No material called {} in this project, built without it".format(
             u", ".join(summary["missing_materials"])))
+    if summary.get("corners") or summary.get("neighbors"):
+        out.print_md(u"- {} corner joint(s) with other cladding; {} neighbouring "
+                     u"cladding(s) updated to match".format(summary.get("corners", 0),
+                                                            summary.get("neighbors", 0)))
     for line in revit_params.describe(summary.get("params", {})):
         out.print_md(u"- " + line)
     out.print_md(u"- Change one panel: edit its values under **Dimensions** (material under **Materials and Finishes**) in Properties. "

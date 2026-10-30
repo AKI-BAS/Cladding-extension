@@ -57,7 +57,9 @@ class FaceFrame(object):
         self.up = up.Normalize()
         self.right = self.up.CrossProduct(self.normal).Normalize()
         self.extents = self._extents()
+        self.face_extents = self.extents
         self._prisms = {}
+        self._boxes = []            # (u0, u1, v0, v1) added past outside corners
 
     def _extents(self):
         us, vs = [], []
@@ -79,21 +81,194 @@ class FaceFrame(object):
         res = self.face.Project(self.point(u_mm, v_mm))
         return res is not None and self.face.IsInside(res.UVPoint)
 
+    def end_span(self, side):
+        """(u, v_low, v_high) of the face's left (-1) or right (+1) end edge."""
+        u_end = self.face_extents[1] if side > 0 else self.face_extents[0]
+        vs = []
+        for loop in self.face.EdgeLoops:
+            for edge in loop:
+                for p in edge.Tessellate():
+                    d = p - self.origin
+                    if abs(d.DotProduct(self.right) / MM - u_end) < 1.0:
+                        vs.append(d.DotProduct(self.up) / MM)
+        if not vs:
+            return u_end, None, None
+        return u_end, min(vs), max(vs)
+
+    def extend(self, side, mm):
+        """Move the left (-1) or right (+1) end by mm (negative = shorten).
+        Extra area past the face is added to the trimming outline."""
+        if abs(mm) < 0.1:
+            return
+        u0, u1, v0, v1 = self.extents
+        if side > 0:
+            u1 += mm
+        else:
+            u0 -= mm
+        self.extents = (u0, u1, v0, v1)
+        if mm > 0:
+            u_end, lo, hi = self.end_span(side)
+            if lo is not None and hi - lo > 10.0:
+                if side > 0:
+                    self._boxes.append((u_end - 1.0, u_end + mm, lo, hi))
+                else:
+                    self._boxes.append((u_end - mm, u_end + 1.0, lo, hi))
+        self._prisms = {}
+
     def prism(self, material_id):
-        """The face outline (with door/window holes) pushed out in front of
-        the face. Panels are intersected with it, so they get cut around
-        openings and along sloped edges. Made in the panel's material so the
-        cut edges keep it."""
+        """The face outline (with door/window holes, plus any corner
+        extensions) pushed out in front of the face. Panels are intersected
+        with it, so they get cut around openings and along sloped edges.
+        Made in the panel's material so the cut edges keep it."""
         key = material_id.ToString()
         if key not in self._prisms:
+            opts = SolidOptions(material_id, ElementId.InvalidElementId)
+            depth = (TRIM_DEPTH + 1.0) * MM
             back = Transform.CreateTranslation(self.normal.Multiply(-1.0 * MM))
             loops = List[CurveLoop]()
             for loop in self.face.GetEdgesAsCurveLoops():
                 loops.Add(CurveLoop.CreateViaTransform(loop, back))
-            opts = SolidOptions(material_id, ElementId.InvalidElementId)
-            self._prisms[key] = GeometryCreationUtilities.CreateExtrusionGeometry(
-                loops, self.normal, (TRIM_DEPTH + 1.0) * MM, opts)
+            solid = GeometryCreationUtilities.CreateExtrusionGeometry(
+                loops, self.normal, depth, opts)
+            for u0, u1, v0, v1 in self._boxes:
+                pts = [self.point(u0, v0, -1.0), self.point(u1, v0, -1.0),
+                       self.point(u1, v1, -1.0), self.point(u0, v1, -1.0)]
+                box = CurveLoop()
+                for a, b in zip(pts, pts[1:] + pts[:1]):
+                    box.Append(Line.CreateBound(a, b))
+                bl = List[CurveLoop]()
+                bl.Add(box)
+                try:
+                    solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                        solid, GeometryCreationUtilities.CreateExtrusionGeometry(
+                            bl, self.normal, depth, opts),
+                        BooleanOperationsType.Union)
+                except Exception as ex:
+                    print(u"Corner extension skipped: {}".format(ex))
+            self._prisms[key] = solid
         return self._prisms[key]
+
+
+# --------------------------------------------------------------------------
+# Corners between claddings
+# --------------------------------------------------------------------------
+def _clad_faces(doc, current_group):
+    """[(stable ref, PlanarFace, surface mm)] for every cladded face in the
+    model; the group being built uses its current (maybe edited) recipe."""
+    from cladding import flashing
+    out = []
+    groups = [g for _, g in _group_storages(doc) if g.get("group") != current_group["group"]]
+    groups.append(current_group)
+    for g in groups:
+        try:
+            surface = flashing.cladding_surface(g["recipe"])
+        except Exception:
+            continue
+        for s in g.get("faces", []):
+            try:
+                ref = Reference.ParseFromStableRepresentation(doc, s)
+                el = doc.GetElement(ref.ElementId)
+                f = el.GetGeometryObjectFromReference(ref) if el else None
+            except Exception:
+                f = None
+            if isinstance(f, PlanarFace):
+                out.append((s, f, surface))
+    return out
+
+
+def _meets(frame, f):
+    """True when face f is at an angle to this face and touches one of its ends."""
+    if abs(f.FaceNormal.Normalize().DotProduct(frame.normal)) > 0.1:
+        return False
+    for side in (-1, 1):
+        u_end, lo, hi = frame.end_span(side)
+        if lo is None:
+            continue
+        res = f.Project(frame.point(u_end, (lo + hi) / 2.0))
+        if res is not None and res.Distance <= 5.0 * MM:
+            return True
+    return False
+
+
+def neighbor_groups(doc, group):
+    """Other claddings that meet this one at a corner (they need rebuilding
+    when this one changes, so the corner joint stays right)."""
+    mine = []
+    for s in group.get("faces", []):
+        try:
+            ref = Reference.ParseFromStableRepresentation(doc, s)
+            f = doc.GetElement(ref.ElementId).GetGeometryObjectFromReference(ref)
+            if isinstance(f, PlanarFace):
+                mine.append(f)
+        except Exception:
+            pass
+    out = []
+    for _, g in _group_storages(doc):
+        if g.get("group") == group["group"]:
+            continue
+        hit = False
+        for s in g.get("faces", []):
+            try:
+                ref = Reference.ParseFromStableRepresentation(doc, s)
+                f = doc.GetElement(ref.ElementId).GetGeometryObjectFromReference(ref)
+            except Exception:
+                continue
+            if not isinstance(f, PlanarFace):
+                continue
+            fr = FaceFrame(f)
+            if any(_meets(fr, m) or _meets(FaceFrame(m), f) for m in mine):
+                hit = True
+                break
+        if hit:
+            out.append(g)
+    return out
+
+
+def rebuild_neighbors(doc, group):
+    """Rebuild claddings at corners of `group`. Returns how many."""
+    n = 0
+    for g in neighbor_groups(doc, group):
+        try:
+            build(doc, resolve_faces(doc, g["faces"]), g, ensure_params=False)
+            n += 1
+        except Exception as ex:
+            print(u"Neighbour cladding {} not updated: {}".format(g.get("group"), ex))
+    return n
+
+
+def corner_extensions(frame, my_ref, my_surface, clad_faces):
+    """{side: mm} to extend (+) or shorten (-) the left (-1) / right (+1) end.
+
+    At a corner where another cladded face meets this one, exactly one of
+    the two claddings covers the corner: the one whose face reference sorts
+    first ("laps"). Outside corner: the lapping cladding runs past the
+    corner by the other cladding's thickness, covering its end. Inside
+    corner: the other cladding is shortened by the lapping one's thickness.
+    """
+    out = {}
+    for side in (-1, 1):
+        u_end, lo, hi = frame.end_span(side)
+        if lo is None:
+            continue
+        p = frame.point(u_end, (lo + hi) / 2.0)
+        direction = frame.right.Multiply(side)
+        for s, f, surface in clad_faces:
+            if s == my_ref:
+                continue
+            n = f.FaceNormal.Normalize()
+            if abs(n.DotProduct(frame.normal)) > 0.1:
+                continue                    # not a corner (parallel faces)
+            res = f.Project(p)
+            if res is None or res.Distance > 5.0 * MM:
+                continue                    # doesn't meet this end
+            laps = my_ref < s
+            turn = n.DotProduct(direction)
+            if turn > 0.9 and laps:         # outside corner
+                out[side] = surface
+            elif turn < -0.9 and not laps:  # inside corner
+                out[side] = -surface - 1.0
+            break
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -250,8 +425,17 @@ def build(doc, faces, group, ensure_params=True):
                           "total_length_m": 0.0, "count": 0}}
     layouts = []
 
+    clad = None
+    corners = 0
     for fi, (ref, face) in enumerate(faces):
         frame = FaceFrame(face)
+        if group["recipe"].get("corners", True):
+            if clad is None:
+                clad = _clad_faces(doc, group)
+            for side, mm in corner_extensions(frame, group["faces"][fi],
+                                              None, clad).items():
+                frame.extend(side, mm)
+                corners += 1
         lay = group["layouts"][fi] if fi < len(group["layouts"]) else None
         panels, placed_layout = groupdata.place(frame.extents, lay, group["recipe"])
         layouts.append(placed_layout)
@@ -320,6 +504,7 @@ def build(doc, faces, group, ensure_params=True):
     save_group(doc, group)
     summary["missing_materials"] = sorted(missing)
     summary["params"] = param_report
+    summary["corners"] = corners
     return summary
 
 

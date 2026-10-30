@@ -187,6 +187,8 @@ def run(doc, element_ids, warn=True):
                 _warn(doc, NO_HOST_ID, els[0].Id)
             continue
         summary = revit_build.build(doc, faces, new_group, ensure_params=False)
+        if any(u"standoff" in c or u"profile" in c for c in changes):
+            revit_build.rebuild_neighbors(doc, new_group)   # corner laps follow
         lines.extend(changes)
         if summary["missing_materials"]:
             lines.append(u"No material called {} in this project".format(
