@@ -20,6 +20,8 @@ CLADDING = {
         ("CT_Profile", "Profile", False),
         ("CT_Material", "Material", False),
         ("CT_Thickness", "Thickness", False),
+        ("CT_Perforation", "Perforation", False),
+        ("CT_OpenArea", "Open area %", False),
         ("CT_PanelWidth", "Width", False),
         ("CT_PanelLength", "Length", False),
         ("#count", "Count", False),
@@ -29,6 +31,7 @@ CLADDING = {
     ],
     "itemized_extra": [("CT_PanelId", "Panel", False)],
     "group_by": "CT_Group",
+    "sort": ["CT_Group", "CT_Profile", "CT_PanelWidth", "CT_PanelLength"],
 }
 
 FLASHINGS = {
@@ -45,6 +48,7 @@ FLASHINGS = {
     ],
     "itemized_extra": [("CT_PanelId", "Door/window, side", False)],
     "group_by": None,
+    "sort": ["CT_Profile", "CT_Material", "CT_PanelLength"],
 }
 
 
@@ -113,18 +117,22 @@ def create(doc, spec, itemized=False):
     if ffield is not None:
         d.AddFilter(ScheduleFilter(ffield.FieldId, ftype, fvalue))
 
-    # sorting / grouping: identical sizes end up on one row with a count
-    first = True
-    for pname, _, total in fields:
-        if pname == "#count" or total or pname not in added:
+    # Sorting / grouping (Revit allows at most 4 levels). Rows with identical
+    # values in every column are combined anyway when not itemized, so 4 is
+    # plenty: cladding, profile, width, length (or type, material, length).
+    order = spec.get("sort") or [f[0] for f in fields
+                                 if f[0] != "#count" and not f[2]]
+    used = 0
+    for pname in order:
+        if used >= 4 or pname not in added:
             continue
         sg = ScheduleSortGroupField(added[pname].FieldId)
-        if first and spec.get("group_by") == pname:
+        if used == 0 and spec.get("group_by") == pname:
             sg.ShowHeader = True
             sg.ShowFooter = True
             sg.ShowBlankLine = True
-        first = False
         d.AddSortGroupField(sg)
+        used += 1
 
     d.IsItemized = bool(itemized)
     d.ShowGrandTotal = True

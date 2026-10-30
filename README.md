@@ -105,6 +105,22 @@ are moved to Dimensions; the output window lists what changed.
 
 Cladding made with an older version: select a panel and click Regenerate once.
 
+## Perforated panels
+In the cladding window (Apply or Switch) pick **Perforation**: round holes,
+staggered 60° or straight rows, with hole Ø and pitch; the open area is shown.
+Per panel use **CT_Perforation** (e.g. `Ø5/8 staggered`, `5/8 straight` or
+`none`); the same value on every panel becomes the cladding default.
+- The sheet stays solid geometry. The tool makes a material variant
+  `<material> | perforated Ø5/8 staggered` with a cutout image (real
+  see-through holes in Ray Trace and render plugins like Enscape/Twinmotion/
+  D5, not in Realistic) and a dot surface pattern (holes in elevations/3D).
+- Cutout images are saved in `library/textures`, so keep the extension on a
+  shared path (S:) for renders on other machines.
+- CT_OpenArea shows the open %, CT_Weight is reduced by it; both are in the
+  Cladding Schedule.
+- If Revit refuses the cutout (non-Generic appearance), the output window says
+  so and gives the image path to set by hand.
+
 ## Copying panels
 Copy a panel (Copy, Ctrl+C/V, Array...) and the copy becomes its own,
 independent panel: it stays where you put it, keeps the size, profile and
@@ -118,6 +134,17 @@ CT_Group, so they get their own group in the schedule.
   first time you edit it.
 - Moving an ordinary (non-copied) panel with Move doesn't stick: the next
   rebuild puts it back in the layout. Copy it instead, or change its size.
+
+## Curved walls
+Pick the face of a wall that is curved in plan and it is clad like a flat
+one: the face is unrolled, panels are laid out by arc length, and each panel
+is bent to the curve with vertical ribs (flat parts of the profile follow the
+arc too). Openings, per-panel edits, overhangs, perforation and schedules
+work the same; widths and lengths are measured along the curve. Cladding on
+the inside of a curve works too. Flashings follow the curve (head and sill are
+swept along the arc, jambs stay vertical), and copied curved panels can be
+edited on their own. A copy that is moved keeps its curve but isn't re-fitted
+to a different radius.
 
 ## Corners
 Where two claddings meet at a corner (two walls, or two faces picked in one
@@ -177,7 +204,9 @@ Segment types: `flat`, `zig`, `sine`, `trapezoid` (`top`, `bottom`), `seam` (`se
 Optional `density` in kg/m3 (default steel 7850).
 
 ## Known limits
-- Flat faces only. Curved faces are skipped.
+- Curved faces: walls curved in plan (vertical cylindrical faces) work with
+  vertical ribs. Horizontal ribs, domes and other curved shapes don't yet.
+  Curved walls get no corner joints yet.
 - No end laps, flashings or corner trims.
 - Panels are DirectShapes: no grips. Change them through the CT_ parameters.
 - Written for Revit 2024 and later on pyRevit's IronPython engine.

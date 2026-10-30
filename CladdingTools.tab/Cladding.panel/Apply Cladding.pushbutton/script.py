@@ -5,7 +5,6 @@ __doc__ = "Pick wall, roof, floor or ceiling faces and clad them with a profiled
 
 from pyrevit import revit, forms, script
 from Autodesk.Revit.UI.Selection import ObjectType
-from Autodesk.Revit.DB import PlanarFace
 from Autodesk.Revit.Exceptions import OperationCanceledException
 
 from cladding import profiles, revit_build, groupdata, revit_params
@@ -24,13 +23,13 @@ def pick_faces():
     faces, skipped = [], 0
     for ref in refs:
         face = doc.GetElement(ref.ElementId).GetGeometryObjectFromReference(ref)
-        if isinstance(face, PlanarFace):
+        if revit_build.is_supported(face):
             faces.append((ref, face))
         else:
             skipped += 1
     if skipped:
-        forms.alert("{} curved face(s) skipped. This version clads flat faces only."
-                    .format(skipped))
+        forms.alert("{} face(s) skipped. Flat faces and curved walls (vertical curved "
+                    "faces) can be clad; other curved shapes can't yet.".format(skipped))
     return faces
 
 
@@ -43,7 +42,7 @@ faces = pick_faces()
 if not faces:
     script.exit()
 
-win = CladdingWindow(doc, [revit_build.FaceFrame(f) for _, f in faces], library)
+win = CladdingWindow(doc, [revit_build.make_frame(f) for _, f in faces], library)
 win.ShowDialog()
 
 if win.result:

@@ -16,6 +16,7 @@ DEFAULT_RECIPE = {
     "joint": 10.0,             # mm gap between panels (end laps ignored in v1)
     "standoff": 30.0,          # mm from the host face to the back of the sheet
     "material": "",            # Revit material name, optional
+    "perforation": None,       # {"d", "pitch", "pattern"} or None
 }
 
 

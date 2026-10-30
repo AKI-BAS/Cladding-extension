@@ -40,11 +40,20 @@ def opening_kind(el):
 
 
 def exterior_face(wall):
+    """The wall's exterior face: flat, or curved for walls curved in plan."""
     for ref in HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior):
         face = wall.GetGeometryObjectFromReference(ref)
-        if isinstance(face, PlanarFace):
+        if face is not None and revit_build.is_supported(face):
             return ref, face
-    raise ValueError("the wall's outside face isn't flat")
+    raise ValueError("the wall's outside face is neither flat nor a curved wall face")
+
+
+def _uv(frame, p):
+    """(u, v) mm of a point in a flat or curved face frame."""
+    if getattr(frame, "curved", False):
+        return frame.uv(p)
+    d = p - frame.origin
+    return d.DotProduct(frame.right) / MM, d.DotProduct(frame.up) / MM
 
 
 def opening_rect(wall, face, frame, inst):
@@ -68,9 +77,9 @@ def opening_rect(wall, face, frame, inst):
                     break
             if cut_by_inst:
                 for p in edge.Tessellate():
-                    d = p - frame.origin
-                    us.append(d.DotProduct(frame.right) / MM)
-                    vs.append(d.DotProduct(frame.up) / MM)
+                    u, v = _uv(frame, p)
+                    us.append(u)
+                    vs.append(v)
     if not us:   # fallback: the family's bounding box projected on the face
         bb = inst.get_BoundingBox(None)
         if bb is None:
@@ -78,16 +87,17 @@ def opening_rect(wall, face, frame, inst):
         for x in (bb.Min.X, bb.Max.X):
             for y in (bb.Min.Y, bb.Max.Y):
                 for z in (bb.Min.Z, bb.Max.Z):
-                    d = XYZ(x, y, z) - frame.origin
-                    us.append(d.DotProduct(frame.right) / MM)
-                    vs.append(d.DotProduct(frame.up) / MM)
+                    u, v = _uv(frame, XYZ(x, y, z))
+                    us.append(u)
+                    vs.append(v)
     return (min(us), max(us), min(vs), max(vs))
 
 
 def cladding_on_wall(doc, wall, face):
     """Group recipe of CladdingTools cladding on this side of the wall, or None.
     Cladding on the other side is ignored."""
-    normal = face.FaceNormal.Normalize()
+    curved = not isinstance(face, PlanarFace)
+    normal = None if curved else face.FaceNormal.Normalize()
     for _, group in revit_build._group_storages(doc):
         for s in group.get("faces", []):
             try:
@@ -97,7 +107,16 @@ def cladding_on_wall(doc, wall, face):
             if ref.ElementId != wall.Id:
                 continue
             f = wall.GetGeometryObjectFromReference(ref)
-            if isinstance(f, PlanarFace) and f.FaceNormal.Normalize().DotProduct(normal) > 0.99:
+            if curved:
+                try:
+                    same = (not isinstance(f, PlanarFace) and abs(
+                        f.get_Radius(0).GetLength() - face.get_Radius(0).GetLength()) < 2.0 * MM)
+                except Exception:
+                    same = False
+                if same:
+                    return group["recipe"]
+            elif isinstance(f, PlanarFace) and \
+                    f.FaceNormal.Normalize().DotProduct(normal) > 0.99:
                 return group["recipe"]
     return None
 
@@ -110,7 +129,7 @@ class OpeningInfo(object):
         if not isinstance(wall, Wall):
             raise ValueError("it isn't hosted in a wall")
         _, self.face = exterior_face(wall)
-        self.frame = revit_build.FaceFrame(self.face)
+        self.frame = revit_build.make_frame(self.face)
         self.rect = opening_rect(wall, self.face, self.frame, inst)
         self.kind = opening_kind(inst)
         self.recipe = cladding_on_wall(doc, wall, self.face)
@@ -183,6 +202,19 @@ def expected_values(info, side, ftype, material, standoff):
     }
 
 
+def _revolve(frame, loops, u_start, run_mm, opts):
+    """Sweep a section placed at u_start along the curve by run_mm (arc length)."""
+    from Autodesk.Revit.DB import Frame
+    radial = frame._radial(u_start)
+    origin = XYZ(frame.center.X, frame.center.Y, frame.point(u_start, 0.0).Z)
+    bz = XYZ.BasisZ
+    by = bz.CrossProduct(radial)
+    angle = frame.s * (run_mm * MM) / frame.radius
+    a0, a1 = (0.0, angle) if angle > 0 else (angle, 0.0)
+    return GeometryCreationUtilities.CreateRevolvedGeometry(
+        Frame(origin, radial, by, bz), loops, a0, a1, opts)
+
+
 def build_side(doc, ds, inst, info, side, ftype, material, standoff, type_cache):
     """Create (ds=None) or update in place one flashing piece."""
     mat_id = revit_build.find_material(doc, material)
@@ -199,9 +231,14 @@ def build_side(doc, ds, inst, info, side, ftype, material, standoff, type_cache)
             loop.Append(Line.CreateBound(a, b))
         loops = List[CurveLoop]()
         loops.Add(loop)
-        direction = info.frame.right.Multiply(ru).Add(info.frame.up.Multiply(rv))
-        shapes.Add(GeometryCreationUtilities.CreateExtrusionGeometry(
-            loops, direction, length * MM, SolidOptions(mat_id, ElementId.InvalidElementId)))
+        opts = SolidOptions(mat_id, ElementId.InvalidElementId)
+        if getattr(info.frame, "curved", False) and ru:
+            # head/sill on a curved wall: turn the section around the wall's axis
+            shapes.Add(_revolve(info.frame, loops, su, ru * length, opts))
+        else:
+            direction = info.frame.right.Multiply(ru).Add(info.frame.up.Multiply(rv))
+            shapes.Add(GeometryCreationUtilities.CreateExtrusionGeometry(
+                loops, direction, length * MM, opts))
     if shapes.Count == 0:
         return None
     if ds is None:

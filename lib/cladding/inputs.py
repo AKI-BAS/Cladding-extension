@@ -17,6 +17,8 @@ PANEL = [
      "Profile of this panel (any library profile name)."),
     ("CT_Material", "material", "4f7c2a91-6e3d-4b58-a0c7-2d9e81f5b6a3",
      "Material of this panel (or flashing piece). Pick from the project's materials."),
+    ("CT_Perforation", "text", "99c985e4-87a9-4161-8eb5-288165cce053",
+     "Perforation of this panel: hole/pitch and pattern, e.g. 'Ø5/8 staggered', or 'none'."),
     ("CT_Standoff", "length", "7b588b98-d9f5-40fb-8899-c176c4012762",
      "Distance from the host face to the back of this panel."),
 ]
@@ -45,6 +47,8 @@ OUTPUTS = [
      "Unfolded sheet area of the panel (calculated)."),
     ("CT_Thickness", "length", "90fe6378-dad7-4ef9-8ea6-65ab7eabd7ee",
      "Sheet thickness from the profile / flashing type (calculated)."),
+    ("CT_OpenArea", "number", "45c86b4b-17d0-4106-986a-0835c2ae14a0",
+     "Open area of the perforation in % (calculated)."),
     ("CT_Weight", "number", "d89ae7c9-cfbe-4b16-87f8-dff2372dee8d",
      "Panel weight in kg (calculated)."),
 ]
@@ -93,7 +97,8 @@ def length(name, value):
 
 
 def material(value):
-    m = (value or u"").strip()
+    from cladding.perforation import base_material
+    m = base_material((value or u"").strip()).strip()
     return u"" if fold(m) in (u"(none)", u"none") else m
 
 
@@ -103,8 +108,16 @@ def differs(name, current, expected):
         return False
     kind = KINDS.get(name, "text")
     if kind == "material":
-        return fold(current) != fold(expected)
+        from cladding.perforation import base_material
+        return fold(base_material(current)) != fold(base_material(expected))
     if kind == "text":
+        if name == "CT_Perforation":
+            from cladding import perforation
+            try:
+                return (perforation.label(perforation.parse(current)) or u"none") != \
+                    (expected or u"none")
+            except ValueError:
+                return True
         if name in ("CT_Profile", "CT_Orientation"):
             return fold(current) != fold(expected)
         return (current or u"").strip() != (expected or u"")

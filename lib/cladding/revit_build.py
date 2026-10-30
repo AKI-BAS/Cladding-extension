@@ -19,7 +19,7 @@ clr.AddReference("RevitAPI")
 from System import Guid, String
 from System.Collections.Generic import List
 from Autodesk.Revit.DB import (
-    XYZ, Line, CurveLoop, GeometryCreationUtilities, SolidOptions, Transform,
+    XYZ, UV, Line, CurveLoop, GeometryCreationUtilities, SolidOptions, Transform,
     BooleanOperationsUtils, BooleanOperationsType,
     DirectShape, DirectShapeType, Element, ElementId, BuiltInCategory, BuiltInParameter,
     GeometryObject, FilteredElementCollector, Material, PlanarFace, Reference,
@@ -43,6 +43,7 @@ SCHEMA_GUID = Guid("6b0f3c1e-8a52-4d6f-9c1b-2e7a5d4f9a31")
 # --------------------------------------------------------------------------
 class FaceFrame(object):
     """Right/up/normal axes and 2D extents (mm) of a planar face."""
+    curved = False
 
     def __init__(self, face):
         if not isinstance(face, PlanarFace):
@@ -174,6 +175,199 @@ class FaceFrame(object):
                     print(u"Corner extension skipped: {}".format(ex))
             self._prisms[key] = solid
         return self._prisms[key]
+
+
+# --------------------------------------------------------------------------
+# Curved faces (curved walls)
+# --------------------------------------------------------------------------
+class CurvedFaceFrame(object):
+    """Unrolled frame for a vertical cylindrical face (a wall curved in plan).
+
+    u = arc length along the face (mm), v = height (mm), n = distance out
+    from the face. Panels are laid out on the unrolled face exactly like on a
+    flat one; point() wraps them back onto the curve, so a vertical-rib
+    profile is bent to the arc and extruded straight up.
+    """
+    curved = True
+
+    def __init__(self, face):
+        import math
+        from Autodesk.Revit.DB import CylindricalFace
+        if not isinstance(face, CylindricalFace):
+            raise ValueError("only flat faces and curved walls are supported")
+        axis = face.Axis.Normalize()
+        if abs(abs(axis.Z) - 1.0) > 1e-3:
+            raise ValueError("only curved faces with a vertical axis (curved walls) "
+                             "are supported")
+        self.face = face
+        self.up = XYZ.BasisZ
+        self.radius = face.get_Radius(0).GetLength()          # feet
+        self.center = XYZ(face.Origin.X, face.Origin.Y, 0.0)
+        self.ex = XYZ(face.get_Radius(0).X, face.get_Radius(0).Y, 0.0).Normalize()
+        self.ey = self.up.CrossProduct(self.ex)
+        self._math = math
+
+        pts = [p for loop in face.EdgeLoops for edge in loop for p in edge.Tessellate()]
+        bb = face.GetBoundingBox()
+        uv_mid = UV((bb.Min.U + bb.Max.U) / 2.0, (bb.Min.V + bb.Max.V) / 2.0)
+        mid = face.Evaluate(uv_mid)
+        n_mid = face.ComputeNormal(uv_mid).Normalize()
+        r_mid = mid - self.center
+        r_mid = XYZ(r_mid.X, r_mid.Y, 0.0).Normalize()
+        self.s = 1.0 if n_mid.DotProduct(r_mid) > 0 else -1.0   # +1: cladding outside the curve
+        self.theta_ref = self._theta(mid)          # middle of the face: spans up to 360°
+        self._z0 = min(p.Z for p in pts)
+        us, vs = [], []
+        for p in pts:
+            u, v = self.uv(p)
+            us.append(u)
+            vs.append(v)
+        self.extents = (min(us), max(us), min(vs), max(vs))
+        self.face_extents = self.extents
+        u_mid = (self.extents[0] + self.extents[1]) / 2.0
+        self.origin = self.point(u_mid, 0.0)
+        self.normal = self._radial(u_mid).Multiply(self.s)
+        self.right = self.up.CrossProduct(self.normal).Normalize()
+        self._prisms = {}
+
+    # ---- mapping -------------------------------------------------------------
+    def _theta(self, p):
+        d = p - self.center
+        return self._math.atan2(d.DotProduct(self.ey), d.DotProduct(self.ex))
+
+    def uv(self, p):
+        math = self._math
+        d = self._theta(p) - self.theta_ref
+        while d > math.pi:
+            d -= 2 * math.pi
+        while d <= -math.pi:
+            d += 2 * math.pi
+        return self.s * d * self.radius / MM, (p.Z - self._z0) / MM
+
+    def _angle(self, u_mm):
+        return self.theta_ref + self.s * (u_mm * MM) / self.radius
+
+    def _radial(self, u_mm):
+        a = self._angle(u_mm)
+        return self.ex.Multiply(self._math.cos(a)).Add(self.ey.Multiply(self._math.sin(a)))
+
+    def point(self, u_mm, v_mm, n_mm=0.0):
+        r = self.radius + self.s * n_mm * MM
+        return (self.center.Add(self._radial(u_mm).Multiply(r))
+                .Add(XYZ(0, 0, self._z0 + v_mm * MM)))
+
+    def contains(self, u_mm, v_mm):
+        res = self.face.Project(self.point(u_mm, v_mm))
+        return res is not None and self.face.IsInside(res.UVPoint)
+
+    def extend(self, side, mm):
+        pass                                  # no corner joints on curved faces
+
+    def end_span(self, side):
+        return (self.extents[1] if side > 0 else self.extents[0]), None, None
+
+    # ---- trimming --------------------------------------------------------------
+    def _depth(self):
+        d = TRIM_DEPTH
+        if self.s < 0:                        # cladding inside the curve
+            d = min(d, 0.9 * self.radius / MM)
+        return d
+
+    def sector(self, box, opts):
+        """Solid filling the region in front of the face over a (u, v) box."""
+        from Autodesk.Revit.DB import Arc
+        u0, u1, v0, v1 = box
+        if u1 - u0 < 1.0 or v1 - v0 < 1.0:
+            return None
+        um = (u0 + u1) / 2.0
+        n_in, n_out = -1.0, self._depth()
+        a0, a1, am = self.point(u0, v0, n_in), self.point(u1, v0, n_in), self.point(um, v0, n_in)
+        b0, b1, bm = self.point(u0, v0, n_out), self.point(u1, v0, n_out), self.point(um, v0, n_out)
+        loop = CurveLoop()
+        loop.Append(Arc.Create(a0, a1, am))
+        loop.Append(Line.CreateBound(a1, b1))
+        loop.Append(Arc.Create(b1, b0, bm))
+        loop.Append(Line.CreateBound(b0, a0))
+        loops = List[CurveLoop]()
+        loops.Add(loop)
+        return GeometryCreationUtilities.CreateExtrusionGeometry(
+            loops, self.up, (v1 - v0) * MM, opts)
+
+    def _holes(self):
+        """(u0, u1, v0, v1) of the door/window holes in the face."""
+        boxes = []
+        for loop in self.face.EdgeLoops:
+            us, vs = [], []
+            for edge in loop:
+                for p in edge.Tessellate():
+                    u, v = self.uv(p)
+                    us.append(u)
+                    vs.append(v)
+            boxes.append((min(us), max(us), min(vs), max(vs)))
+        boxes.sort(key=lambda b: (b[1] - b[0]) * (b[3] - b[2]), reverse=True)
+        return boxes[1:]                     # the biggest loop is the outline
+
+    def prism(self, material_id):
+        key = material_id.ToString()
+        if key not in self._prisms:
+            opts = SolidOptions(material_id, ElementId.InvalidElementId)
+            solid = self.sector(self.extents, opts)
+            for hole in self._holes():
+                cut = self.sector(hole, opts)
+                if cut is None:
+                    continue
+                try:
+                    solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                        solid, cut, BooleanOperationsType.Difference)
+                except Exception as ex:
+                    print(u"Opening not cut out: {}".format(ex))
+            self._prisms[key] = solid
+        return self._prisms[key]
+
+    def prism_with(self, material_id, boxes):
+        base = self.prism(material_id)
+        if not boxes:
+            return base
+        opts = SolidOptions(material_id, ElementId.InvalidElementId)
+        solid = base
+        for box in boxes:
+            extra = self.sector(box, opts)
+            if extra is None:
+                continue
+            try:
+                solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                    solid, extra, BooleanOperationsType.Union)
+            except Exception as ex:
+                print(u"Overhang skipped: {}".format(ex))
+        return solid
+
+
+def make_frame(face):
+    """FaceFrame for a flat face, CurvedFaceFrame for a curved wall face."""
+    if isinstance(face, PlanarFace):
+        return FaceFrame(face)
+    return CurvedFaceFrame(face)
+
+
+def is_supported(face):
+    try:
+        make_frame(face)
+        return True
+    except Exception:
+        return False
+
+
+def _densify(pts, max_len=40.0):
+    """Extra points on long straight bits, so flat parts follow the curve."""
+    out = [pts[0]]
+    for a, b in zip(pts, pts[1:]):
+        L = abs(b[0] - a[0])
+        n = int(L // max_len)
+        for i in range(1, n + 1):
+            t = float(i) / (n + 1)
+            out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+        out.append(b)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -334,6 +528,11 @@ def panel_solid(frame, panel, recipe, material_id):
     # modelled at MIN_MODEL_T. Quantities still use the real thickness.
     t = max(float(prof.get("thickness", 0.7)), MIN_MODEL_T)
     pts = _drop_short(pts, MIN_EDGE)
+    if getattr(frame, "curved", False):
+        if recipe["orientation"] == "horizontal":
+            raise ValueError("horizontal ribs on a curved wall aren't supported; "
+                             "use vertical ribs there")
+        pts = _densify(pts)
     loop2d = _drop_short(profiles.section_loop(pts, t), MIN_EDGE, closed=True)
     lift = float(recipe["standoff"]) + t   # back of the sheet sits on the standoff
 
@@ -396,6 +595,27 @@ def _drop_short(pts, min_len, closed=False):
 # --------------------------------------------------------------------------
 # Materials and the cladding type
 # --------------------------------------------------------------------------
+def panel_material(doc, name, perf, cache, missing=None):
+    """Material id for a panel: the material itself, or its perforated variant."""
+    from cladding import perforation
+    key = (name or u"", perforation.label(perf))
+    if key not in cache:
+        base = find_material(doc, name)
+        if name and base == ElementId.InvalidElementId and missing is not None:
+            missing.add(name)
+        if perf:
+            from cladding import revit_perf
+            base_name = doc.GetElement(base).Name if base != ElementId.InvalidElementId else u""
+            try:
+                cache[key] = revit_perf.ensure_material(doc, base_name, perf)
+            except Exception as ex:
+                print(u"Perforated material not made: {}".format(ex))
+                cache[key] = base
+        else:
+            cache[key] = base
+    return cache[key]
+
+
 def find_material(doc, name):
     """Exact name, else ignoring case and accents ('al' finds 'Ál')."""
     if not name:
@@ -413,9 +633,9 @@ def element_name(el):
         return p.AsString() if p else u""
 
 
-def panel_type(doc, profile_name, material, cache=None):
-    """The shared panel type for a profile + material, created if needed."""
-    name = groupdata.type_name(profile_name, material)
+def panel_type(doc, profile_name, material, cache=None, perf=None):
+    """The shared panel type for a profile + material (+ perforation)."""
+    name = groupdata.type_name(profile_name, material, perf)
     if cache is not None and name in cache:
         return cache[name]
     found = None
@@ -426,7 +646,7 @@ def panel_type(doc, profile_name, material, cache=None):
     if found is None:
         found = DirectShapeType.Create(doc, name, ElementId(BuiltInCategory.OST_GenericModel))
         _store(found, profiles.dumps({"kind": "type", "profile": profile_name,
-                                      "material": material or u""}))
+                                      "material": material or u"", "perforation": perf}))
     if cache is not None:
         cache[name] = found
     return found
@@ -452,8 +672,8 @@ def face_frames(doc, faces, group):
     Returns (frames, number of corner adjustments)."""
     frames, clad, corners = [], None, 0
     for fi, (ref, face) in enumerate(faces):
-        frame = FaceFrame(face)
-        if group["recipe"].get("corners", True):
+        frame = make_frame(face)
+        if group["recipe"].get("corners", True) and not frame.curved:
             if clad is None:
                 clad = _clad_faces(doc, group)
             for side, mm in corner_extensions(frame, group["faces"][fi],
@@ -515,6 +735,41 @@ class StoredFrame(object):
                 + self.up.Multiply(v_mm * MM) + self.normal.Multiply(n_mm * MM))
 
 
+class StoredCurvedFrame(object):
+    """A CurvedFaceFrame's mapping, rebuilt from stored data (copied panels)."""
+    curved = True
+
+    def __init__(self, d):
+        import math
+        self._math = math
+        self.center, self.ex, self.ey = _pt(d["c"]), _pt(d["ex"]), _pt(d["ey"])
+        self.radius, self.s = d["radius"], d["s"]
+        self.theta_ref, self._z0 = d["theta"], d["z0"]
+        self.up = XYZ.BasisZ
+
+    def _radial(self, u_mm):
+        a = self.theta_ref + self.s * (u_mm * MM) / self.radius
+        return self.ex.Multiply(self._math.cos(a)).Add(self.ey.Multiply(self._math.sin(a)))
+
+    def point(self, u_mm, v_mm, n_mm=0.0):
+        r = self.radius + self.s * n_mm * MM
+        return (self.center.Add(self._radial(u_mm).Multiply(r))
+                .Add(XYZ(0, 0, self._z0 + v_mm * MM)))
+
+
+def frame_data(frame):
+    if getattr(frame, "curved", False):
+        return {"type": "curved", "c": _xyz(frame.center), "ex": _xyz(frame.ex),
+                "ey": _xyz(frame.ey), "radius": frame.radius, "s": frame.s,
+                "theta": frame.theta_ref, "z0": frame._z0}
+    return {"o": _xyz(frame.origin), "r": _xyz(frame.right),
+            "u": _xyz(frame.up), "n": _xyz(frame.normal)}
+
+
+def stored_frame(d):
+    return StoredCurvedFrame(d) if d.get("type") == "curved" else StoredFrame(d)
+
+
 def _int_id(el):
     try:
         return int(el.Id.ToString())
@@ -560,14 +815,13 @@ def detach_copies(doc, group, faces=None):
         k = pd["key"]
         recipe = groupdata.panel_recipe(group, k)
         recipe = dict((a, b) for a, b in recipe.items() if a in (
-            "profile", "material", "standoff", "orientation"))
+            "profile", "material", "standoff", "orientation", "perforation"))
         data = {"kind": "loose", "version": groupdata.VERSION, "group": gid,
                 "from_key": k, "uid": ds.UniqueId, "recipe": recipe}
         c_copy, c_orig = centroid(ds), centroid(original)
         if k in placed and c_copy is not None and c_orig is not None:
             frame, p = placed[k]
-            data["frame"] = {"o": _xyz(frame.origin), "r": _xyz(frame.right),
-                             "u": _xyz(frame.up), "n": _xyz(frame.normal)}
+            data["frame"] = frame_data(frame)
             data["panel"] = {"u0": p["u0"], "v0": p["v0"],
                              "width": round(pd.get("width", p["width"]), 2),
                              "length": round(pd.get("length", p["length"]), 2)}
@@ -584,8 +838,12 @@ def detach_copies(doc, group, faces=None):
 def loose_expected(data):
     p = data.get("panel") or {}
     r = data["recipe"]
+    from cladding import perforation
     q = profiles.panel_quantities(r["profile"], p.get("width", 0) or 1, p.get("length", 0) or 1)
+    q["weight_kg"] *= 1.0 - perforation.open_area(r.get("perforation"))
     return {
+        "CT_Perforation": perforation.label(r.get("perforation")) or u"none",
+        "CT_OpenArea": round(perforation.open_area(r.get("perforation")) * 100, 1),
         "CT_PanelWidth": float(p.get("width", 0)),
         "CT_PanelLength": float(p.get("length", 0)),
         "CT_Profile": r["profile"].get("name", "Custom"),
@@ -601,9 +859,9 @@ def loose_expected(data):
 def rebuild_loose(doc, ds, data):
     """Rebuild a loose panel's geometry where it currently is."""
     from Autodesk.Revit.DB import SolidUtils
-    frame = StoredFrame(data["frame"])
+    frame = stored_frame(data["frame"])
     r = data["recipe"]
-    mat = find_material(doc, r.get("material"))
+    mat = panel_material(doc, r.get("material") or u"", r.get("perforation"), {})
     solid = panel_solid(frame, data["panel"], r, mat)
     shift = _pt(data.get("shift", [0, 0, 0]))
     now = centroid(ds)
@@ -613,7 +871,8 @@ def rebuild_loose(doc, ds, data):
     shapes = List[GeometryObject]()
     shapes.Add(solid)
     ds.SetShape(shapes)
-    t = panel_type(doc, r["profile"].get("name", "Custom"), r.get("material") or u"")
+    t = panel_type(doc, r["profile"].get("name", "Custom"), r.get("material") or u"",
+                   perf=r.get("perforation"))
     if ds.GetTypeId() != t.Id:
         ds.SetTypeId(t.Id)
     data["shift"] = _xyz(shift)
@@ -668,11 +927,8 @@ def build(doc, faces, group, ensure_params=True):
             k = groupdata.key(fi, panel["col"], panel["row"])
             recipe = groupdata.panel_recipe(group, k)
             mname = recipe["material"] or u""
-            if mname not in mat_cache:
-                mat_cache[mname] = find_material(doc, mname)
-                if mname and mat_cache[mname] == ElementId.InvalidElementId:
-                    missing.add(mname)
-            mat = mat_cache[mname]
+            perf = recipe.get("perforation")
+            mat = panel_material(doc, mname, perf, mat_cache, missing)
             try:
                 solid = panel_solid(frame, panel, recipe, mat)
             except Exception as ex:
@@ -695,7 +951,7 @@ def build(doc, faces, group, ensure_params=True):
             else:
                 summary["updated"] += 1
             values = groupdata.expected_values(group, k, panel["width"], panel["length"])
-            ptype = panel_type(doc, values["CT_Profile"], mname, type_cache)
+            ptype = panel_type(doc, values["CT_Profile"], mname, type_cache, perf)
             if ds.GetTypeId() != ptype.Id:
                 ds.SetTypeId(ptype.Id)
             shapes = List[GeometryObject]()

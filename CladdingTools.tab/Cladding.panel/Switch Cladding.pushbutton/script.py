@@ -36,7 +36,7 @@ frames, layouts = [], []
 for g in groups.values():
     try:
         for i, (_, f) in enumerate(revit_build.resolve_faces(doc, g["faces"])):
-            frames.append(revit_build.FaceFrame(f))
+            frames.append(revit_build.make_frame(f))
             layouts.append(g["layouts"][i] if i < len(g["layouts"]) else None)
     except Exception:
         pass

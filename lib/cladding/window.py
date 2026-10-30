@@ -14,7 +14,7 @@ import System.Windows.Media as Media
 import System.Windows.Shapes as Shapes
 from System.Windows import Point, Visibility
 
-from cladding import profiles, layout, preview, groupdata
+from cladding import profiles, layout, preview, groupdata, perforation
 
 XAML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui.xaml")
 NO_MATERIAL = "(none)"
@@ -70,6 +70,11 @@ class CladdingWindow(forms.WPFWindow):
         self.JointBox.Text = u"{:g}".format(float(r["joint"]))
         self.StandoffBox.Text = u"{:g}".format(float(r["standoff"]))
         self.OrientationBox.SelectedIndex = 1 if r["orientation"] == "horizontal" else 0
+        perf = perforation.normalize(r.get("perforation"))
+        if perf:
+            self.PerfBox.SelectedIndex = 2 if perf["pattern"] == "straight" else 1
+            self.PerfDBox.Text = u"{:g}".format(perf["d"])
+            self.PerfPBox.Text = u"{:g}".format(perf["pitch"])
         hit = profiles.match_name(r["material"] or u"", material_names) if r["material"] else None
         self.MaterialBox.SelectedIndex = (material_names.index(hit) + 1) if hit else 0
 
@@ -89,7 +94,14 @@ class CladdingWindow(forms.WPFWindow):
             return v
 
         mat = self.MaterialBox.SelectedItem
+        perf = None
+        if self.PerfBox.SelectedIndex > 0:
+            perf = perforation.normalize({
+                "d": num(self.PerfDBox, "Hole diameter", 0.5),
+                "pitch": num(self.PerfPBox, "Pitch", 1),
+                "pattern": "straight" if self.PerfBox.SelectedIndex == 2 else "staggered"})
         return {
+            "perforation": perf,
             "profile": self.library[i],
             "cover_width": num(self.WidthBox, "Cover width", 50),
             "max_length": num(self.LengthBox, "Max length", 200),
@@ -121,6 +133,10 @@ class CladdingWindow(forms.WPFWindow):
             u"Cover width snaps to {:.0f} mm".format(
                 profiles.module_width(pts), profiles.depth(pts),
                 r["profile"].get("thickness", 0.7), snapped))
+        on = self.PerfBox.SelectedIndex > 0
+        self.PerfSizes.IsEnabled = on
+        self.PerfInfo.Text = (u"{:.0f}% open · holes show in renders and as a dot pattern"
+                              .format(perforation.open_area(r["perforation"]) * 100)) if on else u""
         self.draw_preview(r)
         self.show_quantities(r)
 

@@ -23,7 +23,7 @@ defaults. Everything is in mm.
 import copy
 import math
 
-from cladding import profiles, layout, inputs
+from cladding import profiles, layout, inputs, perforation
 from cladding.profiles import fold
 
 VERSION = 2
@@ -185,6 +185,7 @@ def panel_settings(group, k):
         "profile": prof,
         "material": ov["material"] if "material" in ov else (r["material"] or u""),
         "standoff": float(ov["standoff"]) if "standoff" in ov else float(r["standoff"]),
+        "perforation": ov["perforation"] if "perforation" in ov else r.get("perforation"),
     }
 
 
@@ -200,8 +201,11 @@ def expected_values(group, k, width, length):
     r = group["recipe"]
     s = panel_settings(group, k)
     q = profiles.panel_quantities(s["profile"], width, length)
+    q["weight_kg"] *= 1.0 - perforation.open_area(s["perforation"])
     face, col, row = [int(x) for x in k.split(":")]
     return {
+        "CT_Perforation": perforation.label(s["perforation"]) or u"none",
+        "CT_OpenArea": round(perforation.open_area(s["perforation"]) * 100, 1),
         "CT_PanelWidth": float(width),
         "CT_PanelLength": float(length),
         "CT_Profile": s["profile"].get("name", "Custom"),
@@ -307,7 +311,7 @@ def apply_edits(group, panel_edits, panel_count, library):
     # ---- the same value on every panel becomes the cladding default ------
     all_panels = len(panel_edits) >= panel_count
     for name, field in (("CT_Profile", "profile"), ("CT_Material", "material"),
-                        ("CT_Standoff", "standoff")):
+                        ("CT_Standoff", "standoff"), ("CT_Perforation", "perforation")):
         vals = [ed[name] for ed in panel_edits.values() if name in ed]
         if not (all_panels and len(vals) == len(panel_edits)):
             continue
@@ -321,6 +325,10 @@ def apply_edits(group, panel_edits, panel_count, library):
         elif field == "material":
             r["material"] = inputs.material(vals[0])
             changes.append(u"material → {} (all panels)".format(r["material"] or "none"))
+        elif field == "perforation":
+            r["perforation"] = perforation.parse(vals[0])
+            changes.append(u"perforation → {} (all panels)".format(
+                perforation.describe(r["perforation"])))
         else:
             r["standoff"] = inputs.length("CT_Standoff", vals[0])
             changes.append(u"standoff → {:g} mm (all panels)".format(r["standoff"]))
@@ -358,6 +366,10 @@ def apply_edits(group, panel_edits, panel_count, library):
         if "CT_Material" in ed:
             ov["material"] = inputs.material(ed["CT_Material"])
             changes.append(u"{}: material → {}".format(label, ov["material"] or "none"))
+        if "CT_Perforation" in ed:
+            ov["perforation"] = perforation.parse(ed["CT_Perforation"])
+            changes.append(u"{}: perforation → {}".format(
+                label, perforation.describe(ov["perforation"])))
         if "CT_Standoff" in ed:
             ov["standoff"] = inputs.length("CT_Standoff", ed["CT_Standoff"])
             changes.append(u"{}: standoff → {:g} mm".format(label, ov["standoff"]))
@@ -413,11 +425,13 @@ def expected_for(group, panel_data):
 _BAD_NAME_CHARS = u'\\:{}[]|;<>?`~'
 
 
-def type_name(profile_name, material):
-    """Revit type name for a profile + material, e.g.
-    'Cladding - Corrugated 18/76 - Stál'. Characters Revit doesn't allow in
-    names are replaced."""
+def type_name(profile_name, material, perf=None):
+    """Revit type name for a profile + material (+ perforation), e.g.
+    'Cladding - Corrugated 18/76 - Stál - Ø5/8 staggered'. Characters Revit
+    doesn't allow in names are replaced."""
     name = u"Cladding - {} - {}".format(profile_name or u"Custom", material or u"No material")
+    if perf:
+        name += u" - " + perforation.label(perf)
     return u"".join(u"-" if c in _BAD_NAME_CHARS else c for c in name)
 
 
@@ -430,6 +444,9 @@ def type_edits(type_data, expected):
         edits["CT_Profile"] = type_data["profile"]
     if inputs.differs("CT_Material", type_data.get("material", u""), expected.get("CT_Material")):
         edits["CT_Material"] = type_data.get("material", u"")
+    want = perforation.label(type_data.get("perforation")) or u"none"
+    if want != expected.get("CT_Perforation", u"none"):
+        edits["CT_Perforation"] = want
     return edits
 
 
@@ -519,6 +536,13 @@ def switch_settings(group, new, snap=False):
         for ov in g["overrides"].values():
             ov.pop("material", None)
         changes.append(u"material → {} (all panels)".format(r["material"] or u"none"))
+
+    new_perf = perforation.normalize(new.get("perforation"))
+    if new_perf != perforation.normalize(r.get("perforation")):
+        r["perforation"] = new_perf
+        for ov in g["overrides"].values():
+            ov.pop("perforation", None)
+        changes.append(u"perforation → {} (all panels)".format(perforation.describe(new_perf)))
 
     if abs(float(new["standoff"]) - float(r["standoff"])) > 0.05:
         r["standoff"] = round(float(new["standoff"]), 1)

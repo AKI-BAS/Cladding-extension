@@ -105,6 +105,21 @@
                     <ComboBoxItem Content="Vertical ribs"/>
                     <ComboBoxItem Content="Horizontal ribs"/>
                 </ComboBox>
+                <TextBlock Style="{StaticResource Label}" Text="Perforation"/>
+                <ComboBox x:Name="PerfBox" SelectedIndex="0" SelectionChanged="on_change">
+                    <ComboBoxItem Content="None"/>
+                    <ComboBoxItem Content="Round holes, staggered 60°"/>
+                    <ComboBoxItem Content="Round holes, straight rows"/>
+                </ComboBox>
+                <DockPanel x:Name="PerfSizes" Margin="0,6,0,0">
+                    <TextBlock Text="Hole Ø / pitch (mm)" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBox x:Name="PerfDBox" Width="40" Text="5" TextChanged="on_change"/>
+                        <TextBlock Text=" / " VerticalAlignment="Center"/>
+                        <TextBox x:Name="PerfPBox" Width="40" Text="8" TextChanged="on_change"/>
+                    </StackPanel>
+                </DockPanel>
+                <TextBlock x:Name="PerfInfo" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
                 <TextBlock Style="{StaticResource Label}" Text="Material"/>
                 <ComboBox x:Name="MaterialBox" SelectionChanged="on_change"/>
                 <CheckBox x:Name="KeepSizesBox" Margin="0,12,0,0" IsChecked="True" Visibility="Collapsed"

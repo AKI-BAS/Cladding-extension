@@ -23,7 +23,7 @@ from Autodesk.Revit.DB import (
     FailureSeverity, FailureMessage,
 )
 
-from cladding import profiles, inputs, groupdata, revit_build, revit_params, revit_flashing
+from cladding import profiles, inputs, groupdata, revit_build, revit_params, revit_flashing, perforation
 
 UPDATER_GUID = Guid("0d4b7d36-5c8e-4f0b-a7a3-8f1e2c6b9d42")
 BAD_VALUE_ID = FailureDefinitionId(Guid("5e0a2c6f-1b7d-4c3e-9a8f-6d2b4e1c7a90"))
@@ -123,8 +123,10 @@ def group_edits(doc, group, els, library):
         e, outputs_edited = groupdata.find_edits(revit_params.get_values(el), exp)
         if not e:   # picked another type in the Type Selector?
             t = revit_build.read_type(doc, el)
-            if t and groupdata.type_name(t.get("profile"), t.get("material")) != \
-                    groupdata.type_name(exp["CT_Profile"], exp["CT_Material"]):
+            if t and groupdata.type_name(t.get("profile"), t.get("material"),
+                                        t.get("perforation")) != \
+                    groupdata.type_name(exp["CT_Profile"], exp["CT_Material"],
+                                        perforation.parse(exp["CT_Perforation"])):
                 e = groupdata.type_edits(t, exp)
         if e:
             edits[pd["key"]] = e
@@ -141,7 +143,8 @@ def group_edits(doc, group, els, library):
             exp = expected.get(el.Id)
             if exp:
                 revit_params.set_values(el, exp)
-                t = revit_build.panel_type(doc, exp["CT_Profile"], exp["CT_Material"])
+                t = revit_build.panel_type(doc, exp["CT_Profile"], exp["CT_Material"],
+                                           perf=perforation.parse(exp["CT_Perforation"]))
                 if el.GetTypeId() != t.Id:
                     el.SetTypeId(t.Id)
         return None, [], u"{}".format(ex)
@@ -181,8 +184,10 @@ def loose_edits(doc, els, library):
                      if inputs.differs(n, cur.get(n), exp.get(n)))
         if not edits:
             t = revit_build.read_type(doc, el)
-            if t and groupdata.type_name(t.get("profile"), t.get("material")) != \
-                    groupdata.type_name(exp["CT_Profile"], exp["CT_Material"]):
+            if t and groupdata.type_name(t.get("profile"), t.get("material"),
+                                        t.get("perforation")) != \
+                    groupdata.type_name(exp["CT_Profile"], exp["CT_Material"],
+                                        perforation.parse(exp["CT_Perforation"])):
                 edits = groupdata.type_edits(t, exp)
         if not edits and not copied:
             continue
@@ -198,6 +203,8 @@ def loose_edits(doc, els, library):
                                                        {"profiles": {}}, library)
             if "CT_Material" in edits:
                 r["material"] = inputs.material(edits["CT_Material"])
+            if "CT_Perforation" in edits:
+                r["perforation"] = perforation.parse(edits["CT_Perforation"])
             if "CT_Standoff" in edits:
                 r["standoff"] = inputs.length("CT_Standoff", edits["CT_Standoff"])
             if "CT_PanelWidth" in edits:
