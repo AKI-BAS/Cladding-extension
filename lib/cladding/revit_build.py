@@ -228,8 +228,7 @@ def build(doc, faces, group, ensure_params=True):
     Returns a summary dict: created, updated, removed, skipped, trimmed,
     totals, missing_materials.
     """
-    if ensure_params:
-        revit_params.ensure_parameters(doc)
+    param_report = revit_params.ensure_parameters(doc) if ensure_params else {}
     gid = group["group"]
     group["faces"] = [ref.ConvertToStableRepresentation(doc) for ref, _ in faces]
 
@@ -320,6 +319,7 @@ def build(doc, faces, group, ensure_params=True):
     group["layouts"] = layouts
     save_group(doc, group)
     summary["missing_materials"] = sorted(missing)
+    summary["params"] = param_report
     return summary
 
 

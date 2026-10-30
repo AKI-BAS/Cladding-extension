@@ -28,6 +28,7 @@ from cladding import profiles
 SIDES = ("head", "left", "right", "sill")
 FLOOR_LEVEL = 150.0      # mm: windows this close to the bottom of the wall get no sill
 GAP = 1.0                # mm between cladding surface and flashing
+DEFAULT_STANDOFF = 50.0  # mm, flashing on a wall without CladdingTools cladding
 
 
 def library_dir():
@@ -59,15 +60,16 @@ def sides_for(kind, opening, face_extents, include_sill=True):
     return sides
 
 
-def parts(ftype, surface):
+def parts(ftype, standoff):
     """Polylines of a flashing section: [("face", pts), ("return", pts)].
 
-    surface = distance from the wall face to the outside of the cladding.
+    standoff = distance from the wall face to the underside of the face leg
+    (default: just outside the cladding, see default_standoff()).
     """
     t = max(float(ftype.get("thickness", 0.7)), 1.5)
     w = float(ftype.get("face_width", 60))
     k = float(ftype.get("kick", 0))
-    z = surface + GAP + t                 # top of the face leg; its underside rests on the cladding
+    z = float(standoff) + t               # top of the face leg
     face = [(0.0, z), (w, z)]
     if k > 0:
         face.append((w, z - k))
@@ -78,10 +80,10 @@ def parts(ftype, surface):
     return out
 
 
-def loops(ftype, surface):
+def loops(ftype, standoff):
     """Closed section outlines {part: [(x, z), ...]} with sheet thickness."""
     t = max(float(ftype.get("thickness", 0.7)), 1.5)
-    return dict((name, profiles.section_loop(pts, t)) for name, pts in parts(ftype, surface))
+    return dict((name, profiles.section_loop(pts, t)) for name, pts in parts(ftype, standoff))
 
 
 def placements(opening, side, ftype):
@@ -108,9 +110,9 @@ def placements(opening, side, ftype):
     raise ValueError("unknown side " + side)
 
 
-def quantities(ftype, surface, opening, side):
+def quantities(ftype, standoff, opening, side):
     """Run length (mm), developed sheet area (m2) and weight (kg) of one side."""
-    secs = dict(parts(ftype, surface))
+    secs = dict(parts(ftype, standoff))
     place = placements(opening, side, ftype)
     area = 0.0
     for name, pts in secs.items():
@@ -120,6 +122,22 @@ def quantities(ftype, surface, opening, side):
     return {"length_mm": place["face"][6],
             "developed_area_m2": area,
             "weight_kg": area * t / 1000.0 * density}
+
+
+def default_standoff(recipe=None):
+    """Wall to underside of the flashing: just outside the cladding, or
+    DEFAULT_STANDOFF when there is no cladding."""
+    if recipe is None:
+        return DEFAULT_STANDOFF
+    return round(cladding_surface(recipe) + GAP, 1)
+
+
+def find_type(name, library):
+    for f in library:
+        if profiles.fold(f.get("name")) == profiles.fold(name):
+            return f
+    raise ValueError(u"No flashing type called '{}'. Available: {}".format(
+        (name or u"").strip(), u", ".join(f.get("name", "?") for f in library)))
 
 
 def cladding_surface(recipe):

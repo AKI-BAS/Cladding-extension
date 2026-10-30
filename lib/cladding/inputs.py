@@ -15,8 +15,8 @@ PANEL = [
      "Length of this panel. Later panels in the strip re-split the rest."),
     ("CT_Profile", "text", "a6b8954b-b13b-4eef-b2ed-83af6dd2b14e",
      "Profile of this panel (any library profile name)."),
-    ("CT_Material", "text", "89940c4a-ce58-454b-9f8a-eba81e7b8fb1",
-     "Material of this panel, blank for none. Case and accents are ignored."),
+    ("CT_Material", "material", "4f7c2a91-6e3d-4b58-a0c7-2d9e81f5b6a3",
+     "Material of this panel (or flashing piece). Pick from the project's materials."),
     ("CT_Standoff", "length", "7b588b98-d9f5-40fb-8899-c176c4012762",
      "Distance from the host face to the back of this panel."),
 ]
@@ -100,6 +100,8 @@ def differs(name, current, expected):
     if current is None:
         return False
     kind = KINDS.get(name, "text")
+    if kind == "material":
+        return fold(current) != fold(expected)
     if kind == "text":
         if name in ("CT_Profile", "CT_Orientation"):
             return fold(current) != fold(expected)

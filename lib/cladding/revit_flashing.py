@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Build and remove flashings around doors and windows in Revit.
+"""Build, edit and remove flashings around doors and windows in Revit.
 
 Each side (head, jambs, sill) is its own Generic Model, so a single side can
-be deleted with Delete. Flashings are tagged with the door/window they
-belong to, so adding again replaces them and Remove finds them.
+be deleted with Delete. Each piece stores {opening, side, type, material,
+standoff}; editing CT_Profile (flashing type), CT_Material or CT_Standoff on
+a piece, or picking another flashing type in the Type Selector, rebuilds
+that piece in place (tags stay).
 """
 import clr
 clr.AddReference("RevitAPI")
@@ -15,13 +17,16 @@ from Autodesk.Revit.DB import (
     Reference,
 )
 
-from cladding import flashing, profiles, groupdata, revit_build, revit_params
+from cladding import flashing, profiles, groupdata, inputs, revit_build, revit_params
 
 MM = revit_build.MM
 FLASH_APP = "CladdingTools.Flashing"
-DEFAULT_SURFACE = 50.0     # mm, used when the wall has no CladdingTools cladding
+EDITABLE = ("CT_Profile", "CT_Material", "CT_Standoff")
 
 
+# --------------------------------------------------------------------------
+# Openings and walls
+# --------------------------------------------------------------------------
 def is_opening(el):
     try:
         cid = el.Category.Id
@@ -79,20 +84,42 @@ def opening_rect(wall, face, frame, inst):
     return (min(us), max(us), min(vs), max(vs))
 
 
-def cladding_on_wall(doc, wall):
-    """(surface mm, material name) of CladdingTools cladding on this wall."""
+def cladding_on_wall(doc, wall, face):
+    """Group recipe of CladdingTools cladding on this side of the wall, or None.
+    Cladding on the other side is ignored."""
+    normal = face.FaceNormal.Normalize()
     for _, group in revit_build._group_storages(doc):
         for s in group.get("faces", []):
             try:
                 ref = Reference.ParseFromStableRepresentation(doc, s)
             except Exception:
                 continue
-            if ref.ElementId == wall.Id:
-                r = group["recipe"]
-                return flashing.cladding_surface(r), r.get("material") or u""
-    return DEFAULT_SURFACE, u""
+            if ref.ElementId != wall.Id:
+                continue
+            f = wall.GetGeometryObjectFromReference(ref)
+            if isinstance(f, PlanarFace) and f.FaceNormal.Normalize().DotProduct(normal) > 0.99:
+                return group["recipe"]
+    return None
 
 
+class OpeningInfo(object):
+    """Wall face, frame and opening rectangle for one door/window."""
+
+    def __init__(self, doc, inst):
+        wall = inst.Host
+        if not isinstance(wall, Wall):
+            raise ValueError("it isn't hosted in a wall")
+        _, self.face = exterior_face(wall)
+        self.frame = revit_build.FaceFrame(self.face)
+        self.rect = opening_rect(wall, self.face, self.frame, inst)
+        self.kind = opening_kind(inst)
+        self.recipe = cladding_on_wall(doc, wall, self.face)
+        self.label = u"{} {}".format("Door" if self.kind == "door" else "Window", inst.Id)
+
+
+# --------------------------------------------------------------------------
+# Types
+# --------------------------------------------------------------------------
 def flashing_type(doc, type_name, material, cache):
     name = u"".join(u"-" if c in groupdata._BAD_NAME_CHARS else c
                     for c in u"Flashing - {} - {}".format(type_name, material or u"No material"))
@@ -105,10 +132,27 @@ def flashing_type(doc, type_name, material, cache):
             break
     if found is None:
         found = DirectShapeType.Create(doc, name, ElementId(BuiltInCategory.OST_GenericModel))
+        revit_build._store(found, profiles.dumps({"kind": "flashing_type",
+                                                  "type": type_name,
+                                                  "material": material or u""}))
     cache[name] = found
     return found
 
 
+def read_type(doc, el):
+    t = doc.GetElement(el.GetTypeId())
+    if t is None or not isinstance(t, DirectShapeType):
+        return None
+    try:
+        data = revit_build._read(t)
+    except Exception:
+        return None
+    return data if data and data.get("kind") == "flashing_type" else None
+
+
+# --------------------------------------------------------------------------
+# Building one side
+# --------------------------------------------------------------------------
 def existing(doc, inst=None):
     return [ds for ds in FilteredElementCollector(doc).OfClass(DirectShape)
             if ds.ApplicationId == FLASH_APP and
@@ -124,66 +168,134 @@ def remove(doc, inst):
     return ids.Count
 
 
-def add(doc, inst, ftype, material, include_sill, type_cache):
-    """Add (or replace) flashings on one door/window. Call inside a transaction.
+def expected_values(info, side, ftype, material, standoff):
+    q = flashing.quantities(ftype, standoff, info.rect, side)
+    return {
+        "CT_Group": "Flashing",
+        "CT_PanelId": u"{} {}".format(info.label, side),
+        "CT_Profile": ftype["name"],
+        "CT_Material": material or u"",
+        "CT_Standoff": float(standoff),
+        "CT_PanelLength": q["length_mm"],
+        "CT_DevelopedArea": q["developed_area_m2"],
+        "CT_Weight": q["weight_kg"],
+    }
 
-    material: a material name, or None to use the cladding's material.
-    Returns (sides added, material used).
-    """
-    wall = inst.Host
-    if not isinstance(wall, Wall):
-        raise ValueError("it isn't hosted in a wall")
-    _, face = exterior_face(wall)
-    frame = revit_build.FaceFrame(face)
-    rect = opening_rect(wall, face, frame, inst)
-    surface, clad_mat = cladding_on_wall(doc, wall)
-    if material is None:
-        material = clad_mat
+
+def build_side(doc, ds, inst, info, side, ftype, material, standoff, type_cache):
+    """Create (ds=None) or update in place one flashing piece."""
     mat_id = revit_build.find_material(doc, material)
-    kind = opening_kind(inst)
-
-    remove(doc, inst)
-    dtype = flashing_type(doc, ftype["name"], material, type_cache)
-    sections = flashing.loops(ftype, surface)
-    sides = flashing.sides_for(kind, rect, frame.extents, include_sill)
-    label = u"{} {}".format("Door" if kind == "door" else "Window", inst.Id)
-
-    for side in sides:
-        place = flashing.placements(rect, side, ftype)
-        shapes = List[GeometryObject]()
-        for part, loop2d in sections.items():
-            su, sv, ru, rv, ou, ov, length = place[part]
-            if length <= 1.0:
-                continue
-            pts = revit_build._drop_short(loop2d, revit_build.MIN_EDGE, closed=True)
-            pts3 = [frame.point(su + ou * x, sv + ov * x, z) for x, z in pts]
-            loop = CurveLoop()
-            for a, b in zip(pts3, pts3[1:] + pts3[:1]):
-                loop.Append(Line.CreateBound(a, b))
-            loops = List[CurveLoop]()
-            loops.Add(loop)
-            direction = frame.right.Multiply(ru).Add(frame.up.Multiply(rv))
-            shapes.Add(GeometryCreationUtilities.CreateExtrusionGeometry(
-                loops, direction, length * MM,
-                SolidOptions(mat_id, ElementId.InvalidElementId)))
-        if shapes.Count == 0:
+    place = flashing.placements(info.rect, side, ftype)
+    shapes = List[GeometryObject]()
+    for part, loop2d in flashing.loops(ftype, standoff).items():
+        su, sv, ru, rv, ou, ov, length = place[part]
+        if length <= 1.0:
             continue
+        pts = revit_build._drop_short(loop2d, revit_build.MIN_EDGE, closed=True)
+        pts3 = [info.frame.point(su + ou * x, sv + ov * x, z) for x, z in pts]
+        loop = CurveLoop()
+        for a, b in zip(pts3, pts3[1:] + pts3[:1]):
+            loop.Append(Line.CreateBound(a, b))
+        loops = List[CurveLoop]()
+        loops.Add(loop)
+        direction = info.frame.right.Multiply(ru).Add(info.frame.up.Multiply(rv))
+        shapes.Add(GeometryCreationUtilities.CreateExtrusionGeometry(
+            loops, direction, length * MM, SolidOptions(mat_id, ElementId.InvalidElementId)))
+    if shapes.Count == 0:
+        return None
+    if ds is None:
         ds = DirectShape.CreateElement(doc, ElementId(BuiltInCategory.OST_GenericModel))
         ds.ApplicationId = FLASH_APP
         ds.ApplicationDataId = inst.UniqueId
-        ds.SetTypeId(dtype.Id)
-        ds.SetShape(shapes)
-        q = flashing.quantities(ftype, surface, rect, side)
-        revit_params.set_values(ds, {
-            "CT_Group": "Flashing",
-            "CT_PanelId": u"{} {}".format(label, side),
-            "CT_Profile": ftype["name"],
-            "CT_Material": material or u"",
-            "CT_PanelLength": q["length_mm"],
-            "CT_DevelopedArea": q["developed_area_m2"],
-            "CT_Weight": q["weight_kg"],
-        })
-        revit_build._store(ds, profiles.dumps({
-            "kind": "flashing", "opening": inst.UniqueId, "side": side,
-            "type": ftype["name"], "material": material or u""}))
-    return sides, material
+    t = flashing_type(doc, ftype["name"], material, type_cache)
+    if ds.GetTypeId() != t.Id:
+        ds.SetTypeId(t.Id)
+    ds.SetShape(shapes)
+    revit_params.set_values(ds, expected_values(info, side, ftype, material, standoff))
+    revit_build._store(ds, profiles.dumps({
+        "kind": "flashing", "version": 2, "opening": inst.UniqueId, "side": side,
+        "type": ftype["name"], "material": material or u"", "standoff": float(standoff)}))
+    return ds
+
+
+def add(doc, inst, ftype, material, include_sill, type_cache, standoff=None):
+    """Add (or replace) flashings on one door/window. Call inside a transaction.
+
+    material: a material name, or None to use the cladding's material.
+    standoff: wall to underside of the flashing in mm, None = just outside
+    the cladding. Returns (sides, material, standoff).
+    """
+    info = OpeningInfo(doc, inst)
+    if material is None:
+        material = (info.recipe or {}).get("material") or u""
+    if standoff is None:
+        standoff = flashing.default_standoff(info.recipe)
+    remove(doc, inst)
+    sides = flashing.sides_for(info.kind, info.rect, info.frame.extents, include_sill)
+    made = []
+    for side in sides:
+        if build_side(doc, None, inst, info, side, ftype, material, standoff, type_cache):
+            made.append(side)
+    return made, material, standoff
+
+
+# --------------------------------------------------------------------------
+# Edits made in Properties
+# --------------------------------------------------------------------------
+def apply_edits(doc, pieces, library=None):
+    """Rebuild flashing pieces whose CT_Profile / CT_Material / CT_Standoff (or
+    type) were changed. Bad values are put back.
+
+    Returns (changes, errors): lists of text lines.
+    """
+    library = library if library is not None else flashing.load_library()
+    changes, errors, cache, infos = [], [], {}, {}
+    for ds in pieces:
+        try:
+            data = revit_build._read(ds)
+        except Exception:
+            data = None
+        if not data or data.get("kind") != "flashing":
+            continue
+        inst = doc.GetElement(data["opening"])
+        if inst is None:
+            errors.append(u"{}: its door/window no longer exists".format(ds.Id))
+            continue
+        try:
+            info = infos.get(inst.Id) or OpeningInfo(doc, inst)
+            infos[inst.Id] = info
+            ftype = flashing.find_type(data["type"], library)
+        except Exception as ex:
+            errors.append(u"{}: {}".format(ds.Id, ex))
+            continue
+        standoff = data.get("standoff")
+        if standoff is None:
+            standoff = flashing.default_standoff(info.recipe)
+        expected = expected_values(info, data["side"], ftype, data.get("material", u""), standoff)
+        current = revit_params.get_values(ds)
+
+        edits = dict((n, current[n]) for n in EDITABLE
+                     if inputs.differs(n, current.get(n), expected.get(n)))
+        if not edits:
+            t = read_type(doc, ds)
+            if t and (inputs.differs("CT_Profile", t.get("type"), expected["CT_Profile"]) or
+                      inputs.differs("CT_Material", t.get("material", u""),
+                                     expected["CT_Material"])):
+                edits = {"CT_Profile": t.get("type"), "CT_Material": t.get("material", u"")}
+        if not edits:
+            continue
+        try:
+            new_type = flashing.find_type(edits.get("CT_Profile", ftype["name"]), library)
+            new_mat = inputs.material(edits.get("CT_Material", data.get("material", u"")))
+            new_off = inputs.length("CT_Standoff", edits.get("CT_Standoff", standoff))
+        except ValueError as ex:
+            revit_params.set_values(ds, expected)
+            t = flashing_type(doc, ftype["name"], data.get("material", u""), cache)
+            if ds.GetTypeId() != t.Id:
+                ds.SetTypeId(t.Id)
+            errors.append(u"{} {}: {}".format(info.label, data["side"], ex))
+            continue
+        build_side(doc, ds, inst, info, data["side"], new_type, new_mat, new_off, cache)
+        changes.append(u"{} {}: {}, {}, standoff {:g} mm".format(
+            info.label, data["side"], new_type["name"], new_mat or u"no material", new_off))
+    return changes, errors

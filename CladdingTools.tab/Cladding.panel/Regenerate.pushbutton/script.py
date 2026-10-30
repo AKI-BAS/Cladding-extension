@@ -1,42 +1,50 @@
 # -*- coding: utf-8 -*-
-"""Rebuild the selected cladding, keeping all panel edits.
+"""Apply CT_ edits and rebuild the selected cladding(s) and flashing pieces.
 
-Use it after the wall/roof moved or changed shape, or once for cladding made
-with an older version of the tool. Parameter edits update live without it.
+- Picks up every CT_ value you changed in Properties (works even when live
+  updates are off), then rebuilds so the cladding follows its wall/roof.
+  Panels are updated in place, so tags stay.
+- Also run it once on cladding made with an older version of the tool.
+- Shows whether live updates are on in this Revit session.
 
-Shift+Click for more: reset all panel edits, or change the profile of the
-whole cladding.
+Shift+Click: reset all panel edits, or change the profile of the whole cladding.
 """
 __title__ = "Regenerate"
-__doc__ = ("Rebuild the selected cladding to follow its wall/roof, keeping panel edits. "
-           "Shift+Click to reset panel edits or change the profile for the whole cladding.")
+__doc__ = ("Apply CT_ edits and rebuild the selected cladding/flashings, keeping tags. "
+           "Shift+Click to reset panel edits or change the whole cladding's profile.")
 
-from pyrevit import revit, forms, script, EXEC_PARAMS
+from pyrevit import revit, forms, script, EXEC_PARAMS, HOST_APP
 from Autodesk.Revit.DB import DirectShape
 
-from cladding import profiles, groupdata, revit_build
+from cladding import profiles, groupdata, revit_build, revit_params, revit_flashing, live
 
 doc = revit.doc
 out = script.get_output()
 
-group = None
+# --- what is selected ---------------------------------------------------------
+groups, flashings = {}, []
 for el in revit.get_selection():
-    if isinstance(el, DirectShape):
-        group, _ = revit_build.group_for_panel(doc, el)
-        if group:
-            break
-if not group:
-    forms.alert("Select a cladding panel made with Apply Cladding.", exitscript=True)
+    if not isinstance(el, DirectShape):
+        continue
+    if el.ApplicationId == revit_build.APP_ID and el.ApplicationDataId not in groups:
+        g, _ = revit_build.group_for_panel(doc, el)
+        if g:
+            groups[g["group"]] = g
+    elif el.ApplicationId == revit_flashing.FLASH_APP:
+        flashings.append(el)
+if not groups and not flashings:
+    forms.alert("Select a cladding panel or a flashing made with CladdingTools.", exitscript=True)
 
-note = u"Rebuilt to follow the wall/roof; panel edits kept."
-if EXEC_PARAMS.config_mode:                      # Shift+Click
+# --- Shift+Click options (whole cladding) ---------------------------------------
+note = None
+if EXEC_PARAMS.config_mode and groups:
     RESET = "Reset all panel edits (sizes, profiles, materials)"
     PROFILE = "Change the profile of the whole cladding..."
     choice = forms.CommandSwitchWindow.show([RESET, PROFILE], message="Regenerate")
     if not choice:
         script.exit()
     if choice == RESET:
-        group = groupdata.reset_edits(group)
+        groups = dict((k, groupdata.reset_edits(g)) for k, g in groups.items())
         note = u"All panel edits reset."
     else:
         lib = profiles.load_library()
@@ -45,26 +53,59 @@ if EXEC_PARAMS.config_mode:                      # Shift+Click
                                          multiselect=False)
         if not pick:
             script.exit()
-        group = groupdata.set_default_profile(group, lib[names.index(pick)])
+        groups = dict((k, groupdata.set_default_profile(g, lib[names.index(pick)]))
+                      for k, g in groups.items())
         note = u"Profile → {} for all panels.".format(pick)
 
-try:
-    faces = revit_build.resolve_faces(doc, group["faces"])
-except Exception as ex:
-    forms.alert("Can't find the wall/roof face anymore ({}). "
-                "Delete the cladding and apply it again.".format(ex), exitscript=True)
-
+# --- apply edits, then rebuild ------------------------------------------------------
+results = []
 with revit.Transaction("Regenerate cladding"):
-    summary = revit_build.build(doc, faces, group)
+    report = revit_params.ensure_parameters(doc)
+    if note is None:
+        ids = [p.Id for gid in groups for p in revit_build.group_panels(doc, gid)]
+        ids += [f.Id for f in flashings]
+        edit_lines = live.run(doc, ids, warn=False)
+    else:
+        edit_lines = []
+    for gid, g in groups.items():
+        if note is None:
+            g = revit_build.load_group(doc, gid) or g      # pick up applied edits
+        try:
+            faces = revit_build.resolve_faces(doc, g["faces"])
+        except Exception as ex:
+            results.append((gid, None, ex))
+            continue
+        results.append((gid, revit_build.build(doc, faces, g), None))
 
-t = summary["totals"]
-out.print_md(u"### Regenerated `{}`".format(group["group"]))
-out.print_md(u"- " + note)
-out.print_md(u"- {} panels updated in place, {} new, {} removed ({} cut around openings or edges)"
-             .format(summary["updated"], summary["created"], summary["removed"],
-                     summary["trimmed"]))
-out.print_md(u"- Sheet area {:.1f} m², weight {:.0f} kg".format(
-    t["developed_area_m2"], t["weight_kg"]))
-if summary["missing_materials"]:
-    out.print_md(u"- No material called {} in this project, built without it".format(
-        u", ".join(summary["missing_materials"])))
+# --- report ------------------------------------------------------------------------
+out.print_md(u"### Regenerate")
+if note:
+    out.print_md(u"- " + note)
+if edit_lines:
+    out.print_md(u"**Edits applied**")
+    for line in edit_lines:
+        out.print_md(u"- " + line)
+elif note is None:
+    out.print_md(u"- No CT_ edits found; rebuilt to follow the wall/roof.")
+for gid, summary, err in results:
+    if err:
+        out.print_md(u"- **Cladding `{}`:** can't find its wall/roof face ({}). "
+                     u"Delete it and apply it again.".format(gid, err))
+        continue
+    t = summary["totals"]
+    out.print_md(u"- Cladding `{}`: {} panels updated in place, {} new, {} removed, "
+                 u"{} cut around openings. Sheet {:.1f} m², {:.0f} kg".format(
+                     gid, summary["updated"], summary["created"], summary["removed"],
+                     summary["trimmed"], t["developed_area_m2"], t["weight_kg"]))
+    if summary["missing_materials"]:
+        out.print_md(u"  - No material called {} in this project".format(
+            u", ".join(summary["missing_materials"])))
+for line in revit_params.describe(report):
+    out.print_md(u"- " + line)
+
+running, why = live.status(HOST_APP.addin_id)
+out.print_md(u"- Live updates: **{}**{}".format(
+    "on" if running else "off",
+    u"" if running and why == u"on" else u" ({})".format(why)))
+if not running:
+    out.print_md(u"  Edits still work: change CT_ values, then click Regenerate.")

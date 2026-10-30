@@ -14,7 +14,7 @@ import System.Windows.Media as Media
 import System.Windows.Shapes as Shapes
 from System.Windows import Point
 
-from cladding import profiles, layout, preview, revit_build, groupdata
+from cladding import profiles, layout, preview, revit_build, groupdata, revit_params
 
 doc = revit.doc
 uidoc = revit.uidoc
@@ -177,6 +177,8 @@ if win.result:
     if summary["missing_materials"]:
         out.print_md(u"- No material called {} in this project, built without it".format(
             u", ".join(summary["missing_materials"])))
-    out.print_md(u"- Change one panel: edit its values under **Dimensions** in Properties. "
+    for line in revit_params.describe(summary.get("params", {})):
+        out.print_md(u"- " + line)
+    out.print_md(u"- Change one panel: edit its values under **Dimensions** (material under **Materials and Finishes**) in Properties. "
                  u"Change the whole cladding: Select All Instances, or edit CT_CoverWidth, "
                  u"CT_MaxLength, CT_Joint or CT_Orientation on any panel.")

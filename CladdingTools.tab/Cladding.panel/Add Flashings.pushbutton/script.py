@@ -8,8 +8,9 @@ Select doors/windows (or pick them after clicking), then choose:
   - Remove flashings from the selected doors/windows
 
 Each side is its own element: select one and press Delete to remove just
-that side. Adding again replaces a door/window's flashings, e.g. after the
-cladding or the opening changed.
+that side. Edit CT_Profile / CT_Material / CT_Standoff on a piece to change
+it. Adding again replaces a door/window's flashings, e.g. after the cladding
+or the opening changed.
 """
 __title__ = "Add\nFlashings"
 __doc__ = ("Add flashings around the selected doors and windows (head, jambs, sill). "
@@ -81,19 +82,25 @@ material = None if mpick == CLAD else (u"" if mpick == NONE else mpick)
 
 done, failed, cache = [], [], {}
 with revit.Transaction("Add flashings"):
-    revit_params.ensure_parameters(doc)
+    report = revit_params.ensure_parameters(doc)
     for o in openings:
         try:
-            sides, used = revit_flashing.add(doc, o, ftype, material, action == ADD, cache)
-            done.append((o, sides, used))
+            sides, used, standoff = revit_flashing.add(doc, o, ftype, material,
+                                                       action == ADD, cache)
+            done.append((o, sides, used, standoff))
         except Exception as ex:
             failed.append((o, ex))
 
 out.print_md(u"### {} flashings".format(ftype["name"]))
-for o, sides, used in done:
-    out.print_md(u"- {} {}: {} ({})".format(
+for o, sides, used, standoff in done:
+    out.print_md(u"- {} {}: {} ({}, {:g} mm from the wall)".format(
         revit_flashing.opening_kind(o).capitalize(), o.Id, u", ".join(sides),
-        used or u"no material"))
+        used or u"no material", standoff))
 for o, ex in failed:
     out.print_md(u"- **{} {} skipped:** {}".format(
         revit_flashing.opening_kind(o).capitalize(), o.Id, ex))
+for line in revit_params.describe(report):
+    out.print_md(u"- " + line)
+out.print_md(u"- Change a piece: edit CT_Profile (flashing type), CT_Material or CT_Standoff "
+             u"(wall to underside of the flashing) in Properties (material under Materials and Finishes), or pick another "
+             u"Flashing type in the Type Selector.")

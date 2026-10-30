@@ -30,25 +30,29 @@ Reload pyRevit. A **CladdingTools** tab appears.
   "Remove flashings". See Flashings below.
 - **Select Cladding**: select one panel, click, and every panel of that
   cladding is selected.
-- **Regenerate**: rebuilds the selected cladding to follow its wall/roof,
-  keeping all panel edits. Shift+Click: reset all panel edits, or change the
-  profile of the whole cladding.
+- **Regenerate**: applies every CT_ edit on the selected cladding(s) and
+  flashing pieces, then rebuilds so the cladding follows its wall/roof
+  (panels updated in place, tags stay). Works even when live updates are off,
+  and tells you whether they're on. Shift+Click: reset all panel edits, or
+  change the profile of the whole cladding.
 - **Save Profile**: draw ONE module of a profile with detail lines in a drafting
   view (left to right, connected), select them, click. It is saved to
   `library/profiles/` and shows up in Apply Cladding.
 
 ## Editing panels
-Edits update live: change a value in Properties, click Apply, and the
-cladding rebuilds in the same undo step.
+Change a value in Properties and click Apply. With live updates on (started
+by `startup.py` when Revit starts), the cladding updates straight away in the
+same undo step. If they're off, click Regenerate after editing; Regenerate's
+output says which it is and why.
 
-**One panel** (Properties > Dimensions)
+**One panel** (Properties > Dimensions, material under Materials and Finishes)
 
 | Parameter | What it does |
 |---|---|
 | CT_PanelWidth | Width of that panel's strip, snapped to whole profile modules. Later strips shift along. |
 | CT_PanelLength | Length of that panel. Later panels in the strip re-split the rest. |
 | CT_Profile | Profile of that panel (any library profile name) |
-| CT_Material | Material of that panel, blank for none. Case and accents are ignored. |
+| CT_Material | Material of that panel. A real Material parameter under **Materials and Finishes**: pick from the project's materials. |
 
 **Types.** Panels get a type per profile and material, e.g.
 `Cladding - Corrugated 18/76 - Stál`. Picking another type in the Type
@@ -81,7 +85,9 @@ weight are reduced in proportion to what was cut away for openings.
 A value that can't be used (unknown profile, size too small) is put back and
 Revit shows a warning. The parameters are created on Generic Models the first
 time you apply cladding in a project, with fixed GUIDs so schedules and filters
-carry over between projects.
+carry over between projects. A CT_ parameter that exists with the wrong type
+(e.g. made by hand as Text) is replaced with the right one, and per-panel ones
+are moved to Dimensions; the output window lists what changed.
 
 Cladding made with an older version: select a panel and click Regenerate once.
 
@@ -90,11 +96,17 @@ Cladding made with an older version: select a panel and click Regenerate once.
   select one and press Delete to remove just that side.
 - The head runs the full width plus both laps and sits over the jambs; the sill
   runs under them, the way trims lap on site.
-- The flashing sits on the outside of the CladdingTools cladding on that wall
-  (50 mm from the wall if there is none). "Same as the cladding" uses the
-  cladding's material.
+- Flashings always go on the wall's exterior side (Revit's exterior).
+- **CT_Standoff** on a flashing = wall to the underside of the flashing. It
+  starts just outside the CladdingTools cladding on that side (cladding
+  standoff + sheet + profile depth + 1 mm; 50 mm without cladding) and can be
+  changed per piece.
+- **CT_Material** (Materials and Finishes, material picker) and **CT_Profile** (flashing type) can be changed per piece
+  too, or pick another `Flashing - <type> - <material>` type in the Type
+  Selector. The piece is rebuilt in place.
 - Running Add Flashings again on a door/window replaces its flashings, e.g.
-  after the cladding or the opening changed. Flashings don't update live.
+  after the cladding or the opening changed (flashings don't follow cladding
+  changes by themselves).
 - Types are named `Flashing - <type> - <material>`. Parameters: CT_Profile
   (type), CT_Material, CT_PanelLength (run length), CT_DevelopedArea, CT_Weight,
   CT_PanelId (e.g. "Window 345678 head"), CT_Group = "Flashing".
