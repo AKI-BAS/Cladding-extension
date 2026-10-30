@@ -1,0 +1,6 @@
+{
+  "name": "Flat aluminium 4 mm",
+  "thickness": 4,
+  "density": 2700,
+  "pattern": [{"type": "flat", "width": 100}]
+}

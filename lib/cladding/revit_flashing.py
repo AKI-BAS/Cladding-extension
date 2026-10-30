@@ -179,6 +179,7 @@ def expected_values(info, side, ftype, material, standoff):
         "CT_PanelLength": q["length_mm"],
         "CT_DevelopedArea": q["developed_area_m2"],
         "CT_Weight": q["weight_kg"],
+        "CT_Thickness": float(ftype.get("thickness", 0.7)),
     }
 
 

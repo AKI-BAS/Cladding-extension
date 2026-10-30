@@ -42,6 +42,12 @@ Reload pyRevit. A **CladdingTools** tab appears.
   (panels updated in place, tags stay). Works even when live updates are off,
   and tells you whether they're on. Shift+Click: reset all panel edits, or
   change the profile of the whole cladding.
+- **Cladding Schedule** / **Flashing Schedule**: create (or open) a Revit
+  schedule of all cladding panels / flashings: profile or flashing type,
+  material, thickness, width, length, count, flat area (wall covered), sheet
+  area (unfolded, more than flat for corrugated) and weight, with totals.
+  Identical pieces share a row; Shift+Click for one row per piece. They are
+  normal schedules: they update by themselves and can go on sheets.
 - **Save Profile**: draw ONE module of a profile with detail lines in a drafting
   view (left to right, connected), select them, click. It is saved to
   `library/profiles/` and shows up in Apply Cladding.
@@ -86,7 +92,8 @@ cladding's default instead of separate edits.
 | CT_Orientation | Vertical / Horizontal (Lóðrétt / Lárétt also work). Resets panel edits. |
 
 **Calculated** (for schedules; snap back if typed over): CT_Group, CT_PanelId
-(face, strip, piece), CT_CoverArea, CT_DevelopedArea, CT_Weight. Areas and
+(face, strip, piece), CT_Thickness (real sheet thickness from the profile),
+CT_CoverArea, CT_DevelopedArea, CT_Weight. Areas and
 weight are reduced in proportion to what was cut away for openings.
 
 A value that can't be used (unknown profile, size too small) is put back and
@@ -106,6 +113,9 @@ Apply), exactly one of them covers the corner:
   are covered.
 - **Inside corner:** one cladding is shortened by the other's thickness, so
   they don't clash.
+
+When the walls aren't joined at the outside corner, so the end of one wall
+shows between the claddings (up to 600 mm), that strip is covered too.
 
 Which one laps is fixed per corner, so both sides always agree. Apply,
 Regenerate and standoff/profile edits also rebuild the cladding on the other

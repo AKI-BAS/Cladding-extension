@@ -203,18 +203,41 @@ def _clad_faces(doc, current_group):
     return out
 
 
+CORNER_GAP = 600.0   # mm: an uncladded wall end up to this wide is bridged
+
+
+def _corner(frame, side, f):
+    """How face f meets the left (-1) / right (+1) end of this face.
+
+    Returns (gap, turn) or None. gap = distance (mm) from this end to f's
+    plane, along this face; it is > 0 when the end of another wall sits in
+    between (walls not joined at the outside), and that strip gets covered.
+    turn > 0: outside corner, < 0: inside corner.
+    """
+    n = f.FaceNormal.Normalize()
+    if abs(n.DotProduct(frame.normal)) > 0.1:
+        return None                         # parallel faces: not a corner
+    u_end, lo, hi = frame.end_span(side)
+    if lo is None:
+        return None
+    p = frame.point(u_end, (lo + hi) / 2.0)
+    direction = frame.right.Multiply(side)
+    turn = n.DotProduct(direction)
+    if abs(turn) < 0.9:
+        return None
+    gap = (f.Origin - p).DotProduct(n) / turn / MM
+    if gap < -5.0 or gap > CORNER_GAP:
+        return None
+    q = p.Add(direction.Multiply(max(gap, 0.0) * MM))
+    res = f.Project(q)
+    if res is None or res.Distance > (CORNER_GAP + 5.0) * MM:
+        return None                         # f is somewhere else on that plane
+    return max(gap, 0.0), turn
+
+
 def _meets(frame, f):
-    """True when face f is at an angle to this face and touches one of its ends."""
-    if abs(f.FaceNormal.Normalize().DotProduct(frame.normal)) > 0.1:
-        return False
-    for side in (-1, 1):
-        u_end, lo, hi = frame.end_span(side)
-        if lo is None:
-            continue
-        res = f.Project(frame.point(u_end, (lo + hi) / 2.0))
-        if res is not None and res.Distance <= 5.0 * MM:
-            return True
-    return False
+    """True when face f meets one of this face's ends at a corner."""
+    return any(_corner(frame, side, f) is not None for side in (-1, 1))
 
 
 def neighbor_groups(doc, group):
@@ -271,30 +294,33 @@ def corner_extensions(frame, my_ref, my_surface, clad_faces):
     first ("laps"). Outside corner: the lapping cladding runs past the
     corner by the other cladding's thickness, covering its end. Inside
     corner: the other cladding is shortened by the lapping one's thickness.
+    When the walls aren't joined at the outside, the end of a wall sits
+    between the two claddings; the cladding facing the same way as that wall
+    end is first extended across it ("gap"), so nothing grey shows.
     """
     out = {}
     for side in (-1, 1):
-        u_end, lo, hi = frame.end_span(side)
-        if lo is None:
-            continue
-        p = frame.point(u_end, (lo + hi) / 2.0)
-        direction = frame.right.Multiply(side)
+        best = None
         for s, f, surface in clad_faces:
             if s == my_ref:
                 continue
-            n = f.FaceNormal.Normalize()
-            if abs(n.DotProduct(frame.normal)) > 0.1:
-                continue                    # not a corner (parallel faces)
-            res = f.Project(p)
-            if res is None or res.Distance > 5.0 * MM:
-                continue                    # doesn't meet this end
-            laps = my_ref < s
-            turn = n.DotProduct(direction)
-            if turn > 0.9 and laps:         # outside corner
-                out[side] = surface
-            elif turn < -0.9 and not laps:  # inside corner
-                out[side] = -surface - 1.0
-            break
+            rel = _corner(frame, side, f)
+            if rel is None:
+                continue
+            gap, turn = rel
+            if best is None or gap < best[0]:
+                best = (gap, turn, s, surface)
+        if best is None:
+            continue
+        gap, turn, s, surface = best
+        laps = my_ref < s
+        ext = gap
+        if turn > 0 and laps:          # outside corner
+            ext += surface
+        elif turn < 0 and not laps:    # inside corner
+            ext -= surface + 1.0
+        if abs(ext) > 0.1:
+            out[side] = ext
     return out
 
 

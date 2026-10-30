@@ -43,6 +43,8 @@ OUTPUTS = [
      "Facade area covered by the panel (calculated)."),
     ("CT_DevelopedArea", "area", "c22d5738-e462-4a2c-832e-7703a929593c",
      "Unfolded sheet area of the panel (calculated)."),
+    ("CT_Thickness", "length", "90fe6378-dad7-4ef9-8ea6-65ab7eabd7ee",
+     "Sheet thickness from the profile / flashing type (calculated)."),
     ("CT_Weight", "number", "d89ae7c9-cfbe-4b16-87f8-dff2372dee8d",
      "Panel weight in kg (calculated)."),
 ]

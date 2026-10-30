@@ -216,6 +216,7 @@ def expected_values(group, k, width, length):
         "CT_CoverArea": q["cover_area_m2"],
         "CT_DevelopedArea": q["developed_area_m2"],
         "CT_Weight": q["weight_kg"],
+        "CT_Thickness": float(s["profile"].get("thickness", 0.7)),
     }
 
 
