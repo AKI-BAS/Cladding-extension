@@ -404,14 +404,18 @@ CORNER_GAP = 600.0   # mm: an uncladded wall end up to this wide is bridged
 def _corner(frame, side, f):
     """How face f meets the left (-1) / right (+1) end of this face.
 
-    Returns (gap, turn) or None. gap = distance (mm) from this end to f's
-    plane, along this face; it is > 0 when the end of another wall sits in
-    between (walls not joined at the outside), and that strip gets covered.
-    turn > 0: outside corner, < 0: inside corner.
+    Uses the line where the two face planes cross, so it works whether the
+    faces touch, have a gap between them (walls not joined, a wall end in
+    between) or overlap. Returns (gap, turn) or None:
+      gap  = distance (mm) from this end to the other face's plane, along
+             this face (negative: this face runs past that plane)
+      turn > 0 outside corner, < 0 inside corner.
     """
+    if not isinstance(f, PlanarFace):
+        return None
     n = f.FaceNormal.Normalize()
     if abs(n.DotProduct(frame.normal)) > 0.1:
-        return None                         # parallel faces: not a corner
+        return None                         # (nearly) parallel: not a corner
     u_end, lo, hi = frame.end_span(side)
     if lo is None:
         return None
@@ -421,13 +425,24 @@ def _corner(frame, side, f):
     if abs(turn) < 0.9:
         return None
     gap = (f.Origin - p).DotProduct(n) / turn / MM
-    if gap < -5.0 or gap > CORNER_GAP:
+    if abs(gap) > CORNER_GAP:
         return None
-    q = p.Add(direction.Multiply(max(gap, 0.0) * MM))
-    res = f.Project(q)
-    if res is None or res.Distance > (CORNER_GAP + 5.0) * MM:
-        return None                         # f is somewhere else on that plane
-    return max(gap, 0.0), turn
+    # the corner point must be at (or near) the other face, not somewhere
+    # else on its plane
+    q = p.Add(direction.Multiply(gap * MM))
+    try:
+        other = FaceFrame(f)
+    except Exception:
+        return None
+    d = q - other.origin
+    u, v = d.DotProduct(other.right) / MM, d.DotProduct(other.up) / MM
+    u0, u1, v0, v1 = other.face_extents
+    tol = CORNER_GAP + 5.0
+    if not (u0 - tol <= u <= u1 + tol and v0 - tol <= v <= v1 + tol):
+        return None
+    if min(abs(u - u0), abs(u - u1)) > tol:
+        return None                         # not near an end of the other face
+    return gap, turn
 
 
 def _meets(frame, f):
@@ -503,7 +518,7 @@ def corner_extensions(frame, my_ref, my_surface, clad_faces):
             if rel is None:
                 continue
             gap, turn = rel
-            if best is None or gap < best[0]:
+            if best is None or abs(gap) < abs(best[0]):
                 best = (gap, turn, s, surface, standoff)
         if best is None:
             continue

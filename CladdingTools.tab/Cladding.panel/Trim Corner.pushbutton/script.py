@@ -58,8 +58,15 @@ if a["group"] == b["group"] and a["face"] == b["face"]:
                 exitscript=True)
 
 frame_a, frame_b = revit_build.FaceFrame(face_a), revit_build.FaceFrame(face_b)
-side_a = [s for s in (-1, 1) if revit_build._corner(frame_a, s, face_b) is not None]
-side_b = [s for s in (-1, 1) if revit_build._corner(frame_b, s, face_a) is not None]
+def nearest_end(frame, other):
+    """The end of a face that is at the corner (smallest distance to the other face)."""
+    hits = [(abs(r[0]), side) for side, r in
+            ((sd, revit_build._corner(frame, sd, other)) for sd in (-1, 1)) if r is not None]
+    return [sorted(hits)[0][1]] if hits else []
+
+
+side_a = nearest_end(frame_a, face_b)
+side_b = nearest_end(frame_b, face_a)
 if not side_a or not side_b:
     forms.alert("These two claddings don't meet at a corner (their faces must be at an "
                 "angle and end within {:g} mm of each other).".format(revit_build.CORNER_GAP),
