@@ -17,6 +17,7 @@ DEFAULT_RECIPE = {
     "standoff": 30.0,          # mm from the host face to the back of the sheet
     "material": "",            # Revit material name, optional
     "perforation": None,       # {"d", "pitch", "pattern"} or None
+    "single": False,           # Clad Region: one panel filling the boundary
 }
 
 

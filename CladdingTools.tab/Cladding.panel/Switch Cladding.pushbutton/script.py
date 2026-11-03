@@ -36,7 +36,10 @@ frames, layouts = [], []
 for g in groups.values():
     try:
         for i, (_, f) in enumerate(revit_build.resolve_faces(doc, g["faces"])):
-            frames.append(revit_build.make_frame(f))
+            fr = revit_build.make_frame(f)
+            if groupdata.region(g, i):
+                fr.set_region(groupdata.region(g, i))
+            frames.append(fr)
             layouts.append(g["layouts"][i] if i < len(g["layouts"]) else None)
     except Exception:
         pass
@@ -47,7 +50,8 @@ if len(groups) > 1:
     note += u" Showing the first of {} claddings; changes go to all of them.".format(len(groups))
 
 win = CladdingWindow(doc, frames, profiles.load_library(), initial=first["recipe"],
-                     layouts=layouts, mode="switch", note=note)
+                     layouts=layouts, mode="switch", note=note,
+                     region=any(g.get("regions") for g in groups.values()))
 win.ShowDialog()
 if not win.result:
     script.exit()

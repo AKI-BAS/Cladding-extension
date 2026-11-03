@@ -61,6 +61,36 @@ class FaceFrame(object):
         self.face_extents = self.extents
         self._prisms = {}
         self._boxes = []            # (u0, u1, v0, v1) added past outside corners
+        self.region = None          # boundary polygon (Clad Region), else whole face
+
+    def set_region(self, pts):
+        """Limit the cladding to a boundary polygon [(u, v), ...] on this face."""
+        self.region = list(pts)
+        self.extents = groupdata.polygon_box(self.region)
+        self._prisms = {}
+
+    def touches_end(self, side, tol=5.0):
+        """Does the cladding area reach this end of the face? (for corners)"""
+        if not self.region:
+            return True
+        u0, u1 = self.extents[0], self.extents[1]
+        f0, f1 = self.face_extents[0], self.face_extents[1]
+        return (u1 >= f1 - tol) if side > 0 else (u0 <= f0 + tol)
+
+    def _region_solid(self, opts, depth):
+        pts = [self.point(u, v, -1.0) for u, v in self.region]
+        for attempt in (pts, list(reversed(pts))):
+            loop = CurveLoop()
+            for a, b in zip(attempt, attempt[1:] + attempt[:1]):
+                loop.Append(Line.CreateBound(a, b))
+            loops = List[CurveLoop]()
+            loops.Add(loop)
+            try:
+                return GeometryCreationUtilities.CreateExtrusionGeometry(
+                    loops, self.normal, depth, opts)
+            except Exception:
+                continue
+        raise ValueError("the boundary outline isn't a valid closed shape")
 
     def _extents(self):
         us, vs = [], []
@@ -79,6 +109,8 @@ class FaceFrame(object):
                 + self.normal.Multiply(n_mm * MM))
 
     def contains(self, u_mm, v_mm):
+        if self.region and not groupdata.point_in_polygon(u_mm, v_mm, self.region):
+            return False
         res = self.face.Project(self.point(u_mm, v_mm))
         return res is not None and self.face.IsInside(res.UVPoint)
 
@@ -158,6 +190,9 @@ class FaceFrame(object):
                 loops.Add(CurveLoop.CreateViaTransform(loop, back))
             solid = GeometryCreationUtilities.CreateExtrusionGeometry(
                 loops, self.normal, depth, opts)
+            if self.region:
+                solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                    solid, self._region_solid(opts, depth), BooleanOperationsType.Intersect)
             for u0, u1, v0, v1 in self._boxes:
                 pts = [self.point(u0, v0, -1.0), self.point(u1, v0, -1.0),
                        self.point(u1, v1, -1.0), self.point(u0, v1, -1.0)]
@@ -820,6 +855,8 @@ def fingerprint(frame, panel, recipe, material_name):
         [[_r(x), _r(z)] for x, z in profiles.profile_points(prof)],
         _r(recipe["standoff"]), material_name or u"",
         perforation.label(recipe.get("perforation")),
+        bool(recipe.get("single")),
+        [[_r(u, 0.5), _r(v, 0.5)] for u, v in (getattr(frame, "region", None) or [])],
         [[_r(x) for x in b] for b in panel.get("over", [])],
         [[_r(x) for x in b] for b in getattr(frame, "_boxes", []) if _overlaps(b, rect)],
         [[_r(x, 0.5) for x in h] for h in holes if _overlaps(h, rect)],
@@ -855,9 +892,16 @@ def face_frames(doc, faces, group):
     joints = load_joints(doc)
     for fi, (ref, face) in enumerate(faces):
         frame = make_frame(face)
+        reg = groupdata.region(group, fi)
+        if reg:
+            if frame.curved:
+                raise ValueError("boundaries (Clad Region) work on flat faces only")
+            frame.set_region(reg)
         done = set()
         if not frame.curved:
             for side, mm in trim_extensions(doc, group, fi, frame, joints).items():
+                if not frame.touches_end(side):
+                    continue
                 frame.extend(side, mm)
                 done.add(side)
                 corners += 1
@@ -866,7 +910,7 @@ def face_frames(doc, faces, group):
                 clad = _clad_faces(doc, group)
             for side, mm in corner_extensions(frame, group["faces"][fi],
                                               None, clad).items():
-                if side in done:
+                if side in done or not frame.touches_end(side):
                     continue
                 frame.extend(side, mm)
                 corners += 1

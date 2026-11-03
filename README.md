@@ -24,6 +24,13 @@ Reload pyRevit. A **CladdingTools** tab appears.
 ## Buttons
 - **Apply Cladding**: pick flat faces > choose profile and panel settings >
   live preview > Apply. Panels are cut around doors, windows and sloped edges.
+- **Clad Region**: clad only part of a wall. Draw a closed loop of detail or
+  model lines on the wall (any shape), select them, click, pick the wall face.
+  In the window, "Fill the boundary with panels" lays panels out inside the
+  boundary; untick it for one panel filling the whole boundary. See Regions.
+- **Edit Boundary**: draw new boundary lines, select a panel of the cladding
+  and the lines, click. The cladding re-fits, keeping panel edits where they
+  still apply. Shift+Click removes the boundary (whole face again).
 - **Switch Cladding**: select a panel of existing cladding and click. The
   same window as Apply Cladding opens, filled in with that cladding's
   settings. Change the profile, material, widths, joint, standoff or
@@ -108,6 +115,25 @@ carry over between projects. A CT_ parameter that exists with the wrong type
 are moved to Dimensions; the output window lists what changed.
 
 Cladding made with an older version: select a panel and click Regenerate once.
+
+## Regions (Clad Region)
+- The boundary is stored with the cladding, so Regenerate keeps to it and
+  deleted panels don't come back. The lines themselves can be deleted.
+- Filled: the normal layout starts at the boundary's left edge and panels are
+  cut to the boundary (and around openings inside it). One panel: a single
+  panel the size of the boundary, cut to its shape; CT_PanelWidth/Length edits
+  still work on it.
+- Several boundaries on one wall = several claddings (e.g. corrugated below,
+  flat aluminium above). Corner joints only apply where a boundary reaches the
+  end of its wall.
+- Switch Cladding shows the fill / one-panel option for region claddings.
+- Flat faces only; lines are projected straight onto the wall face.
+- **Edit Boundary** re-fits to new lines. If the boundary's start corner
+  (bottom-left, where the layout begins) stays put, the layout and all edits
+  stay and only panels now outside go. If it moves, each edit goes to the
+  panel at the same spot on the wall; edits on spots no longer clad are
+  dropped, and hand-set strip widths/lengths on that face reset. The output
+  says how many edits were kept. Works on whole-wall cladding too.
 
 ## Panel marks
 Every cladding panel gets a mark in **CT_PanelType** (P01, P02...). Panels

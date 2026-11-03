@@ -105,6 +105,11 @@
                     <TextBox x:Name="JointBox" HorizontalAlignment="Right" Text="10" TextChanged="on_change"/></DockPanel>
                 <DockPanel Margin="0,4"><TextBlock Text="Standoff (mm)"/>
                     <TextBox x:Name="StandoffBox" HorizontalAlignment="Right" Text="30" TextChanged="on_change"/></DockPanel>
+                <CheckBox x:Name="FillBox" Margin="0,10,0,0" IsChecked="True" Visibility="Collapsed"
+                          Checked="on_change" Unchecked="on_change">
+                    <TextBlock TextWrapping="Wrap"
+                               Text="Fill the boundary with panels (untick for one panel filling the whole boundary)"/>
+                </CheckBox>
                 <TextBlock Style="{StaticResource Label}" Text="Orientation"/>
                 <ComboBox x:Name="OrientationBox" SelectedIndex="0" SelectionChanged="on_change">
                     <ComboBoxItem Content="Vertical ribs"/>

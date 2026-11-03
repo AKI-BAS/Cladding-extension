@@ -25,13 +25,14 @@ class CladdingWindow(forms.WPFWindow):
     _ready = False
 
     def __init__(self, doc, frames, library, initial=None, layouts=None,
-                 mode="apply", note=None):
+                 mode="apply", note=None, region=False):
         forms.WPFWindow.__init__(self, XAML)
         self.frames = frames
         self.layouts = layouts or []
         self.mode = mode
         self.result = None
         self.keep_sizes = True
+        self.region_mode = region
 
         # profiles: library, plus the current one if it isn't in the library
         self.library = list(library)
@@ -49,6 +50,12 @@ class CladdingWindow(forms.WPFWindow):
         else:
             self.ProfileList.SelectedIndex = 0
             self.MaterialBox.SelectedIndex = 0
+
+        if region:
+            self.FillBox.Visibility = Visibility.Visible
+            self.FillBox.IsChecked = not (initial or {}).get("single", False)
+            self.Title = "Clad region" if mode == "apply" else self.Title
+        self.region_mode = region
 
         if mode == "switch":
             self.Title = "Switch cladding"
@@ -101,6 +108,7 @@ class CladdingWindow(forms.WPFWindow):
                 "pitch": num(self.PerfPBox, "Pitch", 1),
                 "pattern": "straight" if self.PerfBox.SelectedIndex == 2 else "staggered"})
         return {
+            "single": bool(self.region_mode and not self.FillBox.IsChecked),
             "perforation": perf,
             "profile": self.library[i],
             "cover_width": num(self.WidthBox, "Cover width", 50),

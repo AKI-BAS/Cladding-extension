@@ -113,6 +113,22 @@ def place(extents, face_layout, recipe, piece_widths=None):
     horizontal = r["orientation"] == "horizontal"
     across = (v_min, v_max) if horizontal else (u_min, u_max)
     along = (u_min, u_max) if horizontal else (v_min, v_max)
+    if r.get("single"):
+        # one panel filling the whole area (Clad Region, "one panel")
+        w, L = across[1] - across[0], along[1] - along[0]
+        spec = ((face_layout or {}).get("cols") or [{}])[0]
+        pieces = spec.get("pieces") or []
+        if pieces and pieces[0].get("fixed"):
+            L = float(pieces[0]["length"])
+        w = (piece_widths or {}).get((0, 0), w)
+        if horizontal:
+            panel = {"u0": along[0], "v0": across[0], "width": w, "length": L, "col": 0, "row": 0}
+        else:
+            panel = {"u0": across[0], "v0": along[0], "width": w, "length": L, "col": 0, "row": 0}
+        panel["over"] = []
+        fixed = bool(pieces and pieces[0].get("fixed"))
+        return [panel], {"cols": [{"width": w, "fixed": False,
+                                   "pieces": [{"length": L, "fixed": fixed}]}]}
     # After Switch Cladding with "keep sizes", the old standard width is kept
     # exactly instead of snapping to the new profile's ribs.
     cover = float(r["cover_exact"]) if r.get("cover_exact") else layout.snapped_cover_width(r)
@@ -182,6 +198,159 @@ def piece_widths(group, face):
             f, c, r = [int(x) for x in k.split(":")]
             if f == face:
                 out[(c, r)] = float(ov["width"])
+    return out
+
+
+# --------------------------------------------------------------------------
+# Regions (Clad Region: cladding inside a drawn boundary)
+# --------------------------------------------------------------------------
+def region(group, face):
+    """The boundary polygon [(u, v), ...] for a face, or None (whole face)."""
+    pts = (group.get("regions") or {}).get(str(face))
+    return [tuple(p) for p in pts] if pts else None
+
+
+def polygon_box(pts):
+    us, vs = [p[0] for p in pts], [p[1] for p in pts]
+    return (min(us), max(us), min(vs), max(vs))
+
+
+def polygon_area(pts):
+    a = 0.0
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]):
+        a += x1 * y2 - x2 * y1
+    return a / 2.0
+
+
+def point_in_polygon(u, v, pts):
+    inside = False
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]):
+        if (y1 > v) != (y2 > v):
+            x = x1 + (v - y1) * (x2 - x1) / (y2 - y1)
+            if x > u:
+                inside = not inside
+    return inside
+
+
+def chain_outline(segments, tol=5.0):
+    """Join line segments [[(u, v), ...], ...] (any order / direction) into
+    one closed outline. Raises ValueError with a message for the user."""
+    def close(a, b):
+        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+    segments = [list(sg) for sg in segments if len(sg) >= 2]
+    if not segments:
+        raise ValueError(u"Pick the lines of a closed boundary.")
+    chain = list(segments.pop(0))
+    while segments:
+        for i, seg in enumerate(segments):
+            if close(seg[0], chain[-1]):
+                chain.extend(seg[1:])
+            elif close(seg[-1], chain[-1]):
+                chain.extend(list(reversed(seg))[1:])
+            elif close(seg[-1], chain[0]):
+                chain = seg[:-1] + chain
+            elif close(seg[0], chain[0]):
+                chain = list(reversed(seg))[:-1] + chain
+            else:
+                continue
+            segments.pop(i)
+            break
+        else:
+            raise ValueError(u"The lines don't form one connected loop. Check for gaps "
+                             u"between the line ends (they must touch within 5 mm).")
+    if not close(chain[0], chain[-1]):
+        raise ValueError(u"The boundary isn't closed: the last line doesn't end where the "
+                         u"first one starts.")
+    poly = clean_polygon(chain)
+    if poly is None:
+        raise ValueError(u"The boundary is too small or not a valid closed shape.")
+    return poly
+
+
+def refit_region(group, face, poly, old_extents):
+    """Give face `face` a new boundary, keeping panel edits where they still apply.
+
+    If the boundary's start corner (where the layout begins) is unchanged, the
+    layout and every edit stay as they are; panels now outside simply go.
+    If it moved, edits are carried over by position: an edited panel's edit
+    goes to the new panel at the same spot on the wall; edits whose spot is
+    no longer clad are dropped. Hand-set strip widths and piece lengths on
+    that face are reset in that case.
+    Returns (new group, kept, dropped).
+    """
+    g = copy.deepcopy(group)
+    r = g["recipe"]
+    old_poly = region(g, face)
+    old_box = polygon_box(old_poly) if old_poly else tuple(old_extents)
+    new_box = polygon_box(poly)
+    g.setdefault("regions", {})[str(face)] = [list(p) for p in poly]
+    while len(g["layouts"]) <= face:
+        g["layouts"].append({"cols": []})
+    horizontal = r["orientation"] == "horizontal"
+
+    def start(b):
+        return (b[2], b[0]) if horizontal else (b[0], b[2])
+
+    mine = dict((k, v) for k, v in g["overrides"].items() if int(k.split(":")[0]) == face)
+    if all(abs(a - b) < 1.0 for a, b in zip(start(old_box), start(new_box))):
+        placed, _ = place(new_box, g["layouts"][face], r, piece_widths(g, face))
+        alive = set(key(face, p["col"], p["row"]) for p in placed)
+        dropped = [k for k in mine if k not in alive]
+        for k in dropped:
+            g["overrides"].pop(k, None)
+        return g, len(mine) - len(dropped), len(dropped)
+
+    old_placed, _ = place(old_box, g["layouts"][face], r, piece_widths(g, face))
+
+    def rect(p):
+        if horizontal:
+            return (p["u0"], p["u0"] + p["length"], p["v0"], p["v0"] + p["width"])
+        return (p["u0"], p["u0"] + p["width"], p["v0"], p["v0"] + p["length"])
+
+    centres = dict((key(face, p["col"], p["row"]),
+                    ((rect(p)[0] + rect(p)[1]) / 2.0, (rect(p)[2] + rect(p)[3]) / 2.0))
+                   for p in old_placed)
+    g["layouts"][face] = {"cols": []}
+    for k in mine:
+        g["overrides"].pop(k, None)
+    new_placed, _ = place(new_box, None, r)
+    kept = 0
+    for k, ov in mine.items():
+        c = centres.get(k)
+        hit = None
+        for p in new_placed:
+            b = rect(p)
+            if c and b[0] <= c[0] <= b[1] and b[2] <= c[1] <= b[3] and \
+                    point_in_polygon(c[0], c[1], poly):
+                hit = key(face, p["col"], p["row"])
+                break
+        if hit:
+            g["overrides"].setdefault(hit, {}).update(ov)
+            kept += 1
+    return g, kept, len(mine) - kept
+
+
+def clean_polygon(pts, tol=1.0):
+    """Drop repeated / collinear points; counter-clockwise; None if invalid."""
+    out = []
+    for p in pts:
+        if not out or abs(p[0] - out[-1][0]) > tol or abs(p[1] - out[-1][1]) > tol:
+            out.append((round(p[0], 2), round(p[1], 2)))
+    if len(out) > 2 and abs(out[0][0] - out[-1][0]) <= tol and abs(out[0][1] - out[-1][1]) <= tol:
+        out.pop()
+    i = 0
+    while len(out) > 2 and i < len(out):
+        a, b, c = out[i - 1], out[i], out[(i + 1) % len(out)]
+        cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        if abs(cross) < tol * 10:
+            out.pop(i)
+        else:
+            i += 1
+    if len(out) < 3 or abs(polygon_area(out)) < 100.0:
+        return None
+    if polygon_area(out) < 0:
+        out.reverse()
     return out
 
 
@@ -538,6 +707,12 @@ def switch_settings(group, new, snap=False):
     r = g["recipe"]
     new = layout.merged(new)
     changes = []
+
+    if "single" in new and bool(new["single"]) != bool(r.get("single")):
+        r["single"] = bool(new["single"])
+        g["layouts"], g["overrides"] = [], {}
+        changes.append(u"{} (panel edits reset)".format(
+            u"one panel filling the boundary" if r["single"] else u"boundary filled with panels"))
 
     if new["orientation"] != r["orientation"]:
         r["orientation"] = new["orientation"]
